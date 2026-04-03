@@ -1,0 +1,27 @@
+# Training data
+data/
+datasets/
+training_data/
+train/
+*.csv
+*.tsv
+*.jsonl
+*.parquet
+*.h5
+*.hdf5
+*.npz
+*.npy
+*.txt
+*.json
+# Image files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.webp
+*.heic
+*.raw
+*.dng
