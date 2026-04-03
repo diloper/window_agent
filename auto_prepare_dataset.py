@@ -52,7 +52,7 @@ move_files(val_files, 'val')
 
 # --- 5. 自動產生符合類別數量的 data.yaml ---
 yaml_content = f"""
-path: {os.path.abspath(output_base_dir)}
+path: /content/
 train: train/images
 val: val/images
 
