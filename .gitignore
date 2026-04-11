@@ -25,3 +25,5 @@ train/
 *.heic
 *.raw
 *.dng
+my_dataset/val.zip
+my_dataset/data.yaml
