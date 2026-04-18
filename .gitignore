@@ -32,3 +32,4 @@ my_dataset/data.yaml
 !.vscode/*.json
 # Screen recordings
 recordings/
+*.pyc
