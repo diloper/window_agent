@@ -21,6 +21,8 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - This workspace runs on Windows and has a task for dataset verification.
 
 ## Build And Test
+- For generic requests like "功能測試" without a specified target, default to validating `screen_event_recorder.py` first.
+- For `screen_event_recorder.py` validation, prefer `C:\Users\User\miniconda3\python.exe -m py_compile screen_event_recorder.py` as the baseline check.
 - Prefer the existing `prepare-colab-dataset` task for validating dataset preparation behavior.
 - If a task is not suitable, use `C:\Users\User\miniconda3\python.exe auto_prepare_dataset.py` from the workspace root.
 - After Python changes, report what was verified and what was not run.
