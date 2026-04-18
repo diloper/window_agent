@@ -10,6 +10,10 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - State assumptions briefly only when they materially affect the result.
 - For any code change, create and work on a temporary branch first.
 - Never merge into `main` automatically; merge only after explicit human approval.
+- After a user-approved merge into `main` succeeds, automatically delete only the just-merged temporary local branch for that task.
+- Before deleting a branch, verify all of the following: current branch is `main`, target branch is not `main`, and target branch appears in `git branch --merged main`.
+- Delete with `git branch -d <branch>` and do not use force delete (`-D`) unless the user explicitly approves it.
+- After deletion, verify cleanup with `git branch --list <branch>` and ensure no remote branch deletion is performed by default.
 - When executing Git commands, use Git Bash.
 - After code changes, automatically run the relevant test or validation command.
 - If test or runtime errors are caused by the change, fix them and re-run verification before handoff.
