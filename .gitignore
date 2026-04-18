@@ -12,7 +12,6 @@ train/
 *.npz
 *.npy
 *.txt
-*.json
 # Image files
 *.png
 *.jpg
@@ -27,3 +26,9 @@ train/
 *.dng
 my_dataset/val.zip
 my_dataset/data.yaml
+# JSON files
+*.json
+# Exception: Track JSON files in .vscode
+!.vscode/*.json
+# Screen recordings
+recordings/
