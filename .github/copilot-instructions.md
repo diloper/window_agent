@@ -13,6 +13,7 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - When executing Git commands, use Git Bash.
 - After code changes, automatically run the relevant test or validation command.
 - If test or runtime errors are caused by the change, fix them and re-run verification before handoff.
+- During functional testing, if errors are detected, automatically attempt fixes and re-run the same test until it passes or a clear blocker is identified.
 
 ## Project Context
 - Start with `README.md` for workflow and expected inputs and outputs.
