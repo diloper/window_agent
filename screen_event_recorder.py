@@ -2,6 +2,7 @@ import cv2
 import mss
 import json
 import threading
+import numpy as np
 from datetime import datetime
 from pynput import mouse, keyboard
 from pathlib import Path
@@ -37,7 +38,7 @@ class ScreenEventRecorder:
 
                 screenshot = sct.grab(monitor)
                 frame = cv2.cvtColor(
-                    cv2.UMat(screenshot).get(),
+                    np.array(screenshot),
                     cv2.COLOR_BGRA2BGR
                 )
                 out.write(frame)
