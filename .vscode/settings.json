@@ -1,22 +1,19 @@
 {
-    "terminal.integrated.defaultProfile.windows": "Command Prompt",
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
     "terminal.integrated.automationProfile.windows": {
-        "path": "cmd.exe",
-        "args": [
-            "/K",
-            "C:\\Users\\User\\miniconda3\\Scripts\\activate.bat base"
-        ]
+        "path": "powershell.exe"
     },
     "terminal.integrated.env.windows": {
         "CONDA_DEFAULT_ENV": "base",
         "PATH": "C:\\Users\\User\\miniconda3\\Scripts;C:\\Users\\User\\miniconda3;${PATH}"
     },
     "terminal.integrated.profiles.windows": {
-        "Command Prompt": {
-            "path": "cmd.exe",
+        "PowerShell": {
+            "path": "powershell.exe",
             "args": [
-                "/K",
-                "C:\\Users\\User\\miniconda3\\Scripts\\activate.bat base"
+                "-NoExit",
+                "-Command",
+                "& \"C:\\Users\\$env:USERNAME\\miniconda3\\Scripts\\conda.exe\" \"shell.powershell\" \"hook\" | Out-String | Invoke-Expression"
             ]
         }
     },
@@ -58,5 +55,15 @@
         "**/.ruff_cache": true,
         "**/.venv": true,
         "**/venv": true
+    },
+    "chat.tools.terminal.autoApprove": {
+        "C:\\Users\\User\\miniconda3\\python.exe": true,
+        "/^python -c \"import sys; print\\(sys\\.executable\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "git checkout": true,
+        "Test-Path": true,
+        "&": true
     }
 }
