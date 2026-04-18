@@ -112,7 +112,7 @@ class ScreenEventRecorder:
             on_release=self.on_key_release
         ) as key_listener:
             with mouse.Listener(
-                on_move=self.on_mouse_move,
+                on_move=None,
                 on_click=self.on_mouse_click
             ) as mouse_listener:
                 screen_thread.join(timeout=duration_seconds + 2)
