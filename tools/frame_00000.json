@@ -1,0 +1,38 @@
+{
+  "version": "5.0.0",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "object",
+      "score": null,
+      "points": [
+        [
+          625,
+          685
+        ],
+        [
+          649,
+          685
+        ],
+        [
+          649,
+          706
+        ],
+        [
+          625,
+          706
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "difficult": false,
+      "shape_type": "rectangle",
+      "flags": {},
+      "attributes": {}
+    }
+  ],
+  "imagePath": "frame_00000.jpg",
+  "imageData": null,
+  "imageHeight": 719,
+  "imageWidth": 663
+}
