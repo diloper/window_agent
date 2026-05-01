@@ -64,3 +64,91 @@ Output:
 - 使用隨機打散且未固定 seed，因此每次 train/val 可能不同。
 - 腳本是「複製」檔案，不會移動原始資料。
 - 若圖片沒有對應標註，該圖片仍會被複製，但不會有 label。
+
+## Event + MP4 Auto Label Preview / 事件 + 影片自動標註預覽
+
+新增 `auto_label_from_events.py`，可將 `recordings/events_*.json` 與 `recordings/screen_*.mp4` 對齊後，抽取事件附近影格，呼叫 `tools/autolabel.py` 產生 LabelMe，並輸出 YOLO 標註到預覽資料夾。
+
+### Quick Run / 快速執行
+
+```bat
+C:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
+	--events-json recordings/events_20260430_214417.json ^
+	--video recordings/screen_20260430_214417.mp4 ^
+	--output-dir recordings/auto_labels_preview
+```
+
+### Output / 輸出
+
+- `recordings/auto_labels_preview/images`：抽出的事件附近影格
+- `recordings/auto_labels_preview/annotations_labelme`：LabelMe JSON
+- `recordings/auto_labels_preview/labels`：YOLO TXT
+- `recordings/auto_labels_preview/reports/manifest.csv`：逐樣本清單
+- `recordings/auto_labels_preview/reports/run_report.json`：執行摘要
+
+### Useful Options / 常用參數
+
+- `--window-before-ms`、`--window-after-ms`：事件前後抽幀時間窗
+- `--max-frames-per-event`：每個事件最多抽樣幀數
+- `--label-policy local-topk|fixed`：類別策略（本地 Top-k 投票或固定類別）
+- `--skip-autolabel`：只抽幀與產生報表，不跑 ONNX 推論
+
+## SerpApi Image Search Example / SerpApi 圖片搜尋範例
+
+新增 `serpapi_image_search_example.py`，可用 SerpApi 的 Google Images 端點進行圖片搜尋。
+
+### Set API Key On Windows / Windows 設定 API Key
+
+Temporary for current PowerShell session (effective until terminal closes):
+
+目前 PowerShell 視窗暫時生效（關閉終端後失效）：
+
+```powershell
+$env:SERPAPI_API_KEY="your_key"
+```
+
+Persist for current user:
+
+設定為目前使用者永久生效：
+
+```bat
+setx SERPAPI_API_KEY "your_key"
+```
+
+Persist for machine (Administrator required):
+
+設定為整台電腦永久生效（需系統管理員權限）：
+
+```bat
+setx SERPAPI_API_KEY "your_key" /M
+```
+
+Verify:
+
+驗證是否設定成功：
+
+```powershell
+echo $env:SERPAPI_API_KEY
+```
+
+```bat
+echo %SERPAPI_API_KEY%
+```
+
+> Note: `setx` writes to registry. Open a new terminal window to read updated values.
+>
+> 注意：`setx` 會寫入登錄，需開啟新的終端機視窗才會讀到新值。
+
+### Quick Run / 快速執行
+
+```bat
+C:\Users\User\miniconda3\python.exe serpapi_image_search_example.py "cat meme" --num 5
+```
+
+Optional JSON output:
+
+可選擇輸出完整 JSON：
+
+```bat
+C:\Users\User\miniconda3\python.exe serpapi_image_search_example.py "cat meme" --num 5 --save-json serpapi_result.json
+```
