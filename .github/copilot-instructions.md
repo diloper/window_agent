@@ -34,3 +34,14 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 ## Output Expectations
 - Default to a complete answer with implementation summary and validation, not just the next suggested step.
 - Include the concrete verification command when changes affect runtime behavior.
+
+<skills>
+Here is a list of skills that contain domain specific knowledge on a variety of topics.
+Each skill comes with a description of the topic and a file path that contains the detailed instructions.
+When a user asks you to perform a task that falls within the domain of a skill, use the 'read_file' tool to acquire the full instructions from the file URI.
+<skill>
+<name>auto-label-video</name>
+<description>Use when user triggers auto-labeling workflow with patterns like "自動標註 XXX.mp4" or "autolabel XXX.mp4". Standardizes video frame extraction and SerpAPI-based class inference with minimal parameter entry.</description>
+<file>r:\SAM\.github\skills\auto-label-video\SKILL.md</file>
+</skill>
+</skills>
