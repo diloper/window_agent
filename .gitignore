@@ -29,7 +29,9 @@ my_dataset/data.yaml
 # JSON files
 *.json
 # Exception: Track JSON files in .vscode
-!.vscode/*.json
+!.vscode/settings.json
 # Screen recordings
 recordings/
 *.pyc
+model/*.onnx
+
