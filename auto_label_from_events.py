@@ -173,12 +173,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--encoder",
-        default=r"C:/Users/User/xanylabeling_data/models/sam2_hiera_large-r20240801/sam2.1_hiera_large.encoder.onnx",
+        default=r"R:/SAM/model/sam2_hiera_tiny_encoder.onnx",
         help="Encoder ONNX path for tools/autolabel.py",
     )
     parser.add_argument(
         "--decoder",
-        default=r"C:/Users/User/xanylabeling_data/models/sam2_hiera_large-r20240801/sam2.1_hiera_large.decoder.onnx",
+        default=r"R:/SAM/model/sam2_hiera_tiny_decoder.onnx",
         help="Decoder ONNX path for tools/autolabel.py",
     )
     parser.add_argument(
