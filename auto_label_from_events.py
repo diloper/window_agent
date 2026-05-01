@@ -150,8 +150,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="recordings/auto_labels_preview",
-        help="Output preview directory",
+        default=None,
+        help="Output preview directory (default: recordings/auto_labels_preview_<video filename>)",
     )
     parser.add_argument(
         "--window-before-ms",
@@ -629,7 +629,11 @@ def main() -> int:
 
     events_json = Path(args.events_json)
     video_path = Path(args.video)
-    output_dir = Path(args.output_dir)
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        video_stem = video_path.stem.strip() or "video"
+        output_dir = Path("recordings") / f"auto_labels_preview_{video_stem}"
     class_file = Path(args.class_file)
 
     if not events_json.exists():
