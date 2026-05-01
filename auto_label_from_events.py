@@ -156,13 +156,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--window-before-ms",
         type=int,
-        default=150,
+        default=0,
         help="Sampling window before event in milliseconds",
     )
     parser.add_argument(
         "--window-after-ms",
         type=int,
-        default=150,
+        default=0,
         help="Sampling window after event in milliseconds",
     )
     parser.add_argument(
