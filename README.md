@@ -152,3 +152,33 @@ Optional JSON output:
 ```bat
 C:\Users\User\miniconda3\python.exe serpapi_image_search_example.py "cat meme" --num 5 --save-json serpapi_result.json
 ```
+
+## Pending Test Items / 待測試項目
+
+- `https://postimg.cc`
+- `https://serpapi.com/google-reverse-image`
+
+可用於後續驗證圖片上傳與反向搜圖流程。
+
+## Postimages Playwright Upload / Postimages 瀏覽器自動上傳
+
+`upload_to_postimg.py` 透過 Playwright 操作 Postimages 網頁流程來上傳圖片。
+
+### Setup / 安裝
+
+```bat
+C:\Users\User\miniconda3\python.exe -m pip install -r requirements.txt
+C:\Users\User\miniconda3\python.exe -m playwright install chromium
+```
+
+### Quick Run / 快速執行
+
+```bat
+C:\Users\User\miniconda3\python.exe upload_to_postimg.py path\to\image.png
+```
+
+若要看到瀏覽器畫面：
+
+```bat
+C:\Users\User\miniconda3\python.exe upload_to_postimg.py path\to\image.png --show-browser
+```
