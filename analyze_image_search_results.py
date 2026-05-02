@@ -5,7 +5,15 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from serpapi_image_search_example import search_images, search_images_by_file
+from serpapi_image_search_example import (
+    create_drive_service_oauth,
+    delete_drive_file,
+    make_drive_file_public_and_get_url,
+    search_images,
+    search_images_by_file,
+    search_images_by_url,
+    upload_file_to_drive,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,6 +50,26 @@ def parse_args() -> argparse.Namespace:
         "--save-summary",
         default="",
         help="Optional path to save a text summary.",
+    )
+    parser.add_argument(
+        "--use-drive-public-url",
+        action="store_true",
+        help="Upload image to Google Drive and search by public URL, then delete the Drive file.",
+    )
+    parser.add_argument(
+        "--drive-oauth-client-secrets",
+        default="",
+        help="Path to Google OAuth client secrets JSON file (required with --use-drive-public-url).",
+    )
+    parser.add_argument(
+        "--drive-oauth-token",
+        default=".secrets/drive_token.json",
+        help="Path to cached Google OAuth token JSON.",
+    )
+    parser.add_argument(
+        "--drive-folder-id",
+        default="",
+        help="Optional Google Drive folder ID to upload temporary image into.",
     )
     return parser.parse_args()
 
@@ -127,15 +155,66 @@ def main() -> int:
             )
             return 1
 
-        try:
-            data = search_images_by_file(
-                api_key=args.api_key,
-                image_file_path=str(image_path),
-                num=max(1, args.num),
-            )
-        except Exception as exc:
-            print(f"Image search failed: {exc}", file=sys.stderr)
-            return 1
+        if args.use_drive_public_url:
+            if not args.drive_oauth_client_secrets.strip():
+                print(
+                    "Missing --drive-oauth-client-secrets for Drive public URL mode.",
+                    file=sys.stderr,
+                )
+                return 1
+
+            try:
+                drive_service = create_drive_service_oauth(
+                    client_secrets_path=args.drive_oauth_client_secrets,
+                    token_path=args.drive_oauth_token,
+                )
+            except Exception as exc:
+                print(f"Failed to initialize Google Drive OAuth client: {exc}", file=sys.stderr)
+                return 1
+
+            drive_file_id: Optional[str] = None
+            search_error: Optional[Exception] = None
+
+            try:
+                drive_file_id = upload_file_to_drive(
+                    drive_service=drive_service,
+                    image_file_path=str(image_path),
+                    folder_id=args.drive_folder_id,
+                )
+                public_image_url = make_drive_file_public_and_get_url(
+                    drive_service=drive_service,
+                    file_id=drive_file_id,
+                )
+                data = search_images_by_url(
+                    api_key=args.api_key,
+                    image_url=public_image_url,
+                    num=max(1, args.num),
+                )
+            except Exception as exc:
+                search_error = exc
+                data = {}
+            finally:
+                if drive_file_id:
+                    try:
+                        delete_drive_file(drive_service=drive_service, file_id=drive_file_id)
+                        print(f"Deleted Drive file: {drive_file_id}")
+                    except Exception as cleanup_exc:
+                        print(f"Failed to delete Drive file {drive_file_id}: {cleanup_exc}", file=sys.stderr)
+                        return 1
+
+            if search_error is not None:
+                print(f"Image search failed: {search_error}", file=sys.stderr)
+                return 1
+        else:
+            try:
+                data = search_images_by_file(
+                    api_key=args.api_key,
+                    image_file_path=str(image_path),
+                    num=max(1, args.num),
+                )
+            except Exception as exc:
+                print(f"Image search failed: {exc}", file=sys.stderr)
+                return 1
 
         # Use image filename stem as display label for summary
         search_label = f"Image: {image_path}"

@@ -9,8 +9,103 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
 
 SERPAPI_ENDPOINT = "https://serpapi.com/search.json"
+GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+
+
+def create_drive_service_oauth(
+    client_secrets_path: str, token_path: str = ".secrets/drive_token.json"
+) -> Any:
+    secrets_path = Path(client_secrets_path)
+    if not secrets_path.exists() or not secrets_path.is_file():
+        raise FileNotFoundError(
+            f"Google OAuth client secrets file not found: {client_secrets_path}"
+        )
+
+    token_file = Path(token_path)
+    creds: Optional[Credentials] = None
+
+    if token_file.exists() and token_file.is_file():
+        creds = Credentials.from_authorized_user_file(
+            str(token_file), GOOGLE_DRIVE_SCOPES
+        )
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(GoogleAuthRequest())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(secrets_path), GOOGLE_DRIVE_SCOPES
+            )
+            creds = flow.run_local_server(port=0)
+
+        if token_file.parent and not token_file.parent.exists():
+            token_file.parent.mkdir(parents=True, exist_ok=True)
+        token_file.write_text(creds.to_json(), encoding="utf-8")
+
+    return build("drive", "v3", credentials=creds)
+
+
+def upload_file_to_drive(
+    drive_service: Any, image_file_path: str, folder_id: str = ""
+) -> str:
+    image_path = Path(image_file_path)
+    if not image_path.exists() or not image_path.is_file():
+        raise FileNotFoundError(f"Image file not found: {image_file_path}")
+
+    file_metadata: Dict[str, Any] = {"name": image_path.name}
+    if folder_id.strip():
+        file_metadata["parents"] = [folder_id.strip()]
+
+    media = MediaFileUpload(str(image_path), resumable=False)
+    created = (
+        drive_service.files()
+        .create(body=file_metadata, media_body=media, fields="id")
+        .execute()
+    )
+    file_id = str(created.get("id", "")).strip()
+    if not file_id:
+        raise RuntimeError("Drive upload did not return a file id.")
+    return file_id
+
+
+def make_drive_file_public_and_get_url(drive_service: Any, file_id: str) -> str:
+    drive_service.permissions().create(
+        fileId=file_id,
+        body={"type": "anyone", "role": "reader"},
+    ).execute()
+
+    return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+
+def delete_drive_file(drive_service: Any, file_id: str) -> None:
+    drive_service.files().delete(fileId=file_id).execute()
+
+
+def search_images_by_url(api_key: str, image_url: str, num: int = 10) -> Dict[str, Any]:
+    params = {
+        "engine": "google_reverse_image",
+        "image_url": image_url,
+        "api_key": api_key,
+        "num": num,
+    }
+    url = f"{SERPAPI_ENDPOINT}?{urlencode(params)}"
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+
+    with urlopen(req, timeout=30) as resp:
+        raw = resp.read().decode("utf-8")
+
+    data = json.loads(raw)
+    if "error" in data:
+        raise RuntimeError(f"SerpApi error: {data['error']}")
+    return data
 
 
 def search_images(api_key: str, query: str, num: int = 10) -> Dict[str, Any]:
@@ -37,15 +132,15 @@ def search_images_by_file(
 ) -> Dict[str, Any]:
     """
     Perform reverse image search using a local image file.
-    
+
     Args:
         api_key: SerpApi API key
         image_file_path: Path to local image file (jpg, png, gif, webp, etc.)
         num: Number of results to return
-    
+
     Returns:
         SerpApi response as dict
-    
+
     Raises:
         FileNotFoundError: If image file not found
         RuntimeError: If API returns error
@@ -53,42 +148,42 @@ def search_images_by_file(
     img_path = Path(image_file_path)
     if not img_path.exists():
         raise FileNotFoundError(f"Image file not found: {image_file_path}")
-    
+
     if not img_path.is_file():
         raise ValueError(f"Not a file: {image_file_path}")
-    
+
     # Read image file as binary
     with open(img_path, "rb") as f:
         image_data = f.read()
-    
+
     # Build multipart/form-data body
     boundary = str(uuid.uuid4())
     body_parts: List[bytes] = []
-    
+
     # Add engine parameter
     body_parts.append(f"--{boundary}".encode("utf-8"))
     body_parts.append(b"Content-Disposition: form-data; name=\"engine\"")
     body_parts.append(b"")
     body_parts.append(b"google_reverse_image")
-    
+
     # Add num parameter
     body_parts.append(f"--{boundary}".encode("utf-8"))
     body_parts.append(b"Content-Disposition: form-data; name=\"num\"")
     body_parts.append(b"")
     body_parts.append(str(num).encode("utf-8"))
-    
+
     # Add api_key parameter
     body_parts.append(f"--{boundary}".encode("utf-8"))
     body_parts.append(b"Content-Disposition: form-data; name=\"api_key\"")
     body_parts.append(b"")
     body_parts.append(api_key.encode("utf-8"))
-    
+
     # Add image file
     body_parts.append(f"--{boundary}".encode("utf-8"))
     mime_type, _ = mimetypes.guess_type(str(img_path))
     if mime_type is None:
         mime_type = "application/octet-stream"
-    
+
     content_disposition = (
         f'Content-Disposition: form-data; name="image"; filename="{img_path.name}"'
     ).encode("utf-8")
@@ -96,13 +191,13 @@ def search_images_by_file(
     body_parts.append(f"Content-Type: {mime_type}".encode("utf-8"))
     body_parts.append(b"")
     body_parts.append(image_data)
-    
+
     # Final boundary
     body_parts.append(f"--{boundary}--".encode("utf-8"))
     body_parts.append(b"")
-    
+
     body = b"\r\n".join(body_parts)
-    
+
     # Make POST request
     url = SERPAPI_ENDPOINT
     headers = {
@@ -110,10 +205,10 @@ def search_images_by_file(
         "Content-Type": f"multipart/form-data; boundary={boundary}",
     }
     req = Request(url, data=body, headers=headers, method="POST")
-    
+
     with urlopen(req, timeout=30) as resp:
         raw = resp.read().decode("utf-8")
-    
+
     data = json.loads(raw)
     if "error" in data:
         raise RuntimeError(f"SerpApi error: {data['error']}")
