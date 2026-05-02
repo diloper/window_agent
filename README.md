@@ -152,3 +152,95 @@ Optional JSON output:
 ```bat
 C:\Users\User\miniconda3\python.exe serpapi_image_search_example.py "cat meme" --num 5 --save-json serpapi_result.json
 ```
+
+## Pending Test Items / 待測試項目
+
+- `https://postimg.cc`
+- `https://serpapi.com/google-reverse-image`
+
+可用於後續驗證圖片上傳與反向搜圖流程。
+
+## Postimages Playwright Upload / Postimages 瀏覽器自動上傳
+
+`upload_to_postimg.py` 透過 Playwright 操作 Postimages 網頁流程來上傳圖片。
+
+### Setup / 安裝
+
+```bat
+C:\Users\User\miniconda3\python.exe -m pip install -r requirements.txt
+C:\Users\User\miniconda3\python.exe -m playwright install chromium
+```
+
+### Quick Run / 快速執行
+
+```bat
+C:\Users\User\miniconda3\python.exe upload_to_postimg.py path\to\image.png
+```
+
+若要看到瀏覽器畫面：
+
+```bat
+C:\Users\User\miniconda3\python.exe upload_to_postimg.py path\to\image.png --show-browser
+```
+
+## Google Reverse Image Search / Google 反向圖片搜尋 (google-search-results.py)
+
+`google-search-results.py` 自動上傳本地圖片到 Postimages，並透過 SerpApi 進行 Google Lens 反向搜尋，最後分析搜尋結果中最常見的標題或關鍵詞。
+
+### Setup / 安裝
+
+首先設定 SerpApi API Key（見上方 SerpApi 章節）：
+
+```powershell
+$env:SERPAPI_API_KEY="your_serpapi_key"
+```
+
+或永久設定：
+
+```bat
+setx SERPAPI_API_KEY "your_serpapi_key"
+```
+
+### Quick Run / 快速執行
+
+預設使用 `A/frame_00000.jpg`：
+
+```bat
+C:\Users\User\miniconda3\python.exe google-search-results.py
+```
+
+指定不同的本地圖片：
+
+```bat
+set LOCAL_IMAGE_PATH=path\to\your\image.png
+C:\Users\User\miniconda3\python.exe google-search-results.py
+```
+
+或使用環境變數一行執行：
+
+```powershell
+$env:LOCAL_IMAGE_PATH="A/frame_00001.jpg"; & 'C:\Users\User\miniconda3\python.exe' google-search-results.py
+```
+
+### 流程說明
+
+1. **上傳本地圖片** — 使用 Playwright 自動化流程上傳到 Postimages
+2. **Google Lens 搜尋** — 透過 SerpApi 取得視覺相似的搜尋結果
+3. **分析結果標題** — 提取最常見的標題或關鍵詞（超過 3 個字元）
+4. **自動清理** — 搜尋完成後自動刪除 Postimages 上傳的圖片
+
+### Output / 輸出
+
+```json
+{
+  "result": "top_keyword_or_title",
+  "count": 3,
+  "mode": "keyword",
+  "sample_titles": ["Title 1", "Title 2", "Title 3"]
+}
+```
+
+- `result`: 最常重複出現的標題或關鍵詞
+- `count`: 出現次數
+- `mode`: 分析模式 (`exact_title`, `keyword`, `no_titles`, `fallback_title`)
+- `sample_titles`: 包含該關鍵詞的示例標題
