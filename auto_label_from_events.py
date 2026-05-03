@@ -1,5 +1,6 @@
 import argparse
 import csv
+import importlib.util
 import json
 import os
 import re
@@ -9,10 +10,48 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
-from serpapi_image_search_example import search_images
+import numpy as np
+
+
+_GOOGLE_SEARCH_RESULTS_MODULE: Optional[ModuleType] = None
+_GOOGLE_SEARCH_RESULTS_LOAD_ERROR: Optional[Exception] = None
+
+
+try:
+    _script_path = Path(__file__).with_name("google-search-results.py")
+    if not _script_path.exists():
+        raise FileNotFoundError(f"google-search-results.py not found: {_script_path}")
+
+    _spec = importlib.util.spec_from_file_location("google_search_results_script", _script_path)
+    if _spec is None or _spec.loader is None:
+        raise RuntimeError(f"Cannot load module spec from {_script_path}")
+
+    _module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+    _GOOGLE_SEARCH_RESULTS_MODULE = _module
+except Exception as exc:
+    _GOOGLE_SEARCH_RESULTS_LOAD_ERROR = exc
+
+
+def search_images(api_key: str, query: str, num: int = 10) -> Dict[str, Any]:
+    """Proxy text-query search through statically loaded google-search-results.py module."""
+    if _GOOGLE_SEARCH_RESULTS_MODULE is None:
+        raise RuntimeError(
+            f"Failed to load google-search-results.py: {_GOOGLE_SEARCH_RESULTS_LOAD_ERROR}"
+        )
+
+    params = {
+        "engine": "google_images",
+        "q": query,
+        "api_key": api_key,
+        "num": num,
+    }
+    search = _GOOGLE_SEARCH_RESULTS_MODULE.GoogleSearch(params)
+    return search.get_dict()
 
 
 TIMESTAMP_PATTERN = re.compile(r"(\d{8}_\d{6})")
@@ -42,6 +81,11 @@ class FrameSample:
     status: str = "pending"
     error: str = ""
     inferred_label: str = ""
+    crop_path: Optional[Path] = None
+    crop_width: int = 0
+    crop_height: int = 0
+    search_label: str = ""
+    search_status: str = ""
 
 
 class LocalClassProvider:
@@ -190,7 +234,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--label-policy",
         default="serpapi-topk",
-        choices=["serpapi-topk", "fixed"],
+        choices=["serpapi-topk", "fixed", "crop-search-direct"],
         help="Class assignment strategy",
     )
     parser.add_argument(
@@ -470,6 +514,118 @@ def load_candidates(class_file: Path) -> List[str]:
     return candidates
 
 
+def load_image_bgr(image_path: Path) -> np.ndarray:
+    raw = np.fromfile(str(image_path), dtype=np.uint8)
+    image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+    if image is None:
+        raise FileNotFoundError(f"Cannot read image: {image_path}")
+    return image
+
+
+def read_first_shape_bbox(annotation_path: Path) -> Optional[Tuple[int, int, int, int]]:
+    with annotation_path.open("r", encoding="utf-8") as fp:
+        payload = json.load(fp)
+
+    shapes = payload.get("shapes", [])
+    if not shapes:
+        return None
+
+    points = shapes[0].get("points", [])
+    if not points:
+        return None
+
+    xs = [float(point[0]) for point in points]
+    ys = [float(point[1]) for point in points]
+    x_min = int(max(0, min(xs)))
+    y_min = int(max(0, min(ys)))
+    x_max = int(max(xs))
+    y_max = int(max(ys))
+    if x_max <= x_min or y_max <= y_min:
+        return None
+    return x_min, y_min, x_max, y_max
+
+
+def crop_image_from_annotation(sample: FrameSample) -> np.ndarray:
+    bbox = read_first_shape_bbox(sample.annotation_path)
+    if bbox is None:
+        raise ValueError(f"No valid shape bbox found in annotation: {sample.annotation_path}")
+
+    image = load_image_bgr(sample.image_path)
+    height, width = image.shape[:2]
+    x_min, y_min, x_max, y_max = bbox
+    x_min = max(0, min(x_min, width - 1))
+    y_min = max(0, min(y_min, height - 1))
+    x_max = max(x_min + 1, min(x_max, width))
+    y_max = max(y_min + 1, min(y_max, height))
+
+    crop = image[y_min:y_max, x_min:x_max]
+    if crop.size == 0:
+        raise ValueError(f"Empty crop extracted from annotation: {sample.annotation_path}")
+    return crop
+
+
+def resize_image_to_fit(image: np.ndarray, max_width: int = 640, max_height: int = 480) -> np.ndarray:
+    height, width = image.shape[:2]
+    if width <= 0 or height <= 0:
+        raise ValueError("Invalid crop dimensions")
+
+    scale = min(max_width / width, max_height / height)
+    if scale >= 1.0:
+        return image
+
+    resized_width = max(1, int(round(width * scale)))
+    resized_height = max(1, int(round(height * scale)))
+    return cv2.resize(image, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
+
+
+def write_image_bgr(image_path: Path, image: np.ndarray) -> None:
+    suffix = image_path.suffix or ".jpg"
+    ok, encoded = cv2.imencode(suffix, image)
+    if not ok:
+        raise RuntimeError(f"Failed to encode image: {image_path}")
+    image_path.write_bytes(encoded.tobytes())
+
+
+def sanitize_label_name(raw_label: str, fallback_label: str) -> str:
+    label = re.sub(r"\s+", " ", (raw_label or "").strip())
+    label = re.sub(r"[\r\n\t]", " ", label)
+    label = label.strip(" .")
+    return label or fallback_label
+
+
+def infer_sample_label_from_crop(
+    sample: FrameSample,
+    crops_dir: Path,
+    api_key: str,
+    fallback_label: str,
+) -> str:
+    if _GOOGLE_SEARCH_RESULTS_MODULE is None:
+        raise RuntimeError(
+            f"Failed to load google-search-results.py: {_GOOGLE_SEARCH_RESULTS_LOAD_ERROR}"
+        )
+
+    crop = crop_image_from_annotation(sample)
+    resized = resize_image_to_fit(crop)
+    crop_path = crops_dir / f"{sample.image_path.stem}_crop.jpg"
+    write_image_bgr(crop_path, resized)
+
+    sample.crop_path = crop_path
+    sample.crop_width = int(resized.shape[1])
+    sample.crop_height = int(resized.shape[0])
+
+    analysis = _GOOGLE_SEARCH_RESULTS_MODULE.analyze_local_image_with_google_lens(
+        crop_path,
+        api_key,
+        validate_ocr=False,
+    )
+    top_repetition_result = analysis.get("top_repetition_result", {})
+    search_label = sanitize_label_name(top_repetition_result.get("result", ""), fallback_label)
+
+    sample.search_label = search_label
+    sample.search_status = analysis.get("reason", "ok")
+    return search_label
+
+
 def pick_topk(scores: Dict[str, float], k: int) -> List[Tuple[str, float]]:
     return sorted(scores.items(), key=lambda x: (-x[1], x[0]))[: max(1, k)]
 
@@ -596,6 +752,11 @@ def write_manifest(samples: Sequence[FrameSample], path: Path) -> None:
         "y",
         "image_path",
         "annotation_path",
+        "crop_path",
+        "crop_width",
+        "crop_height",
+        "search_label",
+        "search_status",
         "inferred_label",
         "status",
         "error",
@@ -615,6 +776,11 @@ def write_manifest(samples: Sequence[FrameSample], path: Path) -> None:
                     "y": s.y,
                     "image_path": str(s.image_path),
                     "annotation_path": str(s.annotation_path),
+                    "crop_path": str(s.crop_path) if s.crop_path else "",
+                    "crop_width": s.crop_width,
+                    "crop_height": s.crop_height,
+                    "search_label": s.search_label,
+                    "search_status": s.search_status,
                     "inferred_label": s.inferred_label,
                     "status": s.status,
                     "error": s.error,
@@ -652,10 +818,12 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     images_dir = output_dir / "images"
     anno_dir = output_dir / "annotations_labelme"
+    crops_dir = output_dir / "crops"
     labels_dir = output_dir / "labels"
     reports_dir = output_dir / "reports"
     images_dir.mkdir(parents=True, exist_ok=True)
     anno_dir.mkdir(parents=True, exist_ok=True)
+    crops_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
@@ -715,15 +883,38 @@ def main() -> int:
                 sample.error = err
                 failures += 1
 
-    candidates = load_candidates(class_file)
     fallback_label = args.fixed_label or "object"
+    serpapi_key = args.serpapi_api_key or os.getenv("SERPAPI_API_KEY", "")
+
     if args.label_policy == "fixed":
         event_labels = {event.event_id: fallback_label for event in events}
+    elif args.label_policy == "crop-search-direct":
+        event_labels = {}
+        if not serpapi_key:
+            print("[WARN] SERPAPI_API_KEY is missing; fallback to fixed label policy")
+            for sample in samples:
+                sample.search_status = "missing_api_key"
+        else:
+            for sample in samples:
+                if sample.status != "ok":
+                    continue
+                try:
+                    sample.search_label = infer_sample_label_from_crop(
+                        sample,
+                        crops_dir,
+                        serpapi_key,
+                        fallback_label,
+                    )
+                    sample.search_status = sample.search_status or "ok"
+                except Exception as exc:
+                    sample.search_status = "crop_search_failed"
+                    sample.error = str(exc)
+                    sample.search_label = fallback_label
     else:
+        candidates = load_candidates(class_file)
         if not candidates:
             candidates = [fallback_label]
 
-        serpapi_key = args.serpapi_api_key or os.getenv("SERPAPI_API_KEY", "")
         if not serpapi_key:
             print("[WARN] SERPAPI_API_KEY is missing; fallback to fixed label policy")
             event_labels = {event.event_id: fallback_label for event in events}
@@ -743,7 +934,10 @@ def main() -> int:
             )
 
     for sample in samples:
-        label = event_labels.get(sample.event_id, fallback_label)
+        if args.label_policy == "crop-search-direct":
+            label = sample.search_label or fallback_label
+        else:
+            label = event_labels.get(sample.event_id, fallback_label)
         sample.inferred_label = label
         if sample.status == "ok":
             try:
@@ -754,9 +948,11 @@ def main() -> int:
                 failures += 1
 
     class_order: List[str] = []
-    for c in candidates:
-        if c not in class_order:
-            class_order.append(c)
+    if args.label_policy != "crop-search-direct":
+        candidates = load_candidates(class_file)
+        for c in candidates:
+            if c not in class_order:
+                class_order.append(c)
     for s in samples:
         if s.inferred_label and s.inferred_label not in class_order:
             class_order.append(s.inferred_label)
@@ -782,6 +978,7 @@ def main() -> int:
         "output_dir": str(output_dir),
         "images_dir": str(images_dir),
         "annotations_dir": str(anno_dir),
+        "crops_dir": str(crops_dir),
         "labels_dir": str(labels_dir),
         "classes_file": str(classes_out),
         "manifest": str(manifest_path),
