@@ -8,7 +8,7 @@ from pathlib import Path
 import requests
 from serpapi import GoogleSearch
 from upload_to_postimg import upload_to_postimg
-from easyocr_checker import detect_target_text_types_with_easyocr, DEFAULT_OCR_MIN_CONFIDENCE
+from easyocr_checker import detect_target_text_types, DEFAULT_OCR_MIN_CONFIDENCE
 
 API_KEY = os.getenv("SERPAPI_API_KEY", "")
 
@@ -86,22 +86,29 @@ def main():
         "--ocr-min-confidence",
         type=float,
         default=DEFAULT_OCR_MIN_CONFIDENCE,
-        help="EasyOCR 最低信心分數門檻，範圍 0.0 到 1.0，預設 0.6",
+        help="OCR 最低信心分數門檻，範圍 0.0 到 1.0，預設 0.6",
+    )
+    parser.add_argument(
+        "--ocr-engine",
+        choices=["easyocr", "paddleocr"],
+        default="paddleocr",
+        help="OCR 引擎，'paddleocr'（預設）或 'easyocr'",
     )
     args = parser.parse_args()
 
     local_image_path = Path(args.image_path)
 
     try:
-        ocr_summary = detect_target_text_types_with_easyocr(
+        ocr_summary = detect_target_text_types(
             local_image_path,
             min_confidence=args.ocr_min_confidence,
+            engine=args.ocr_engine,
         )
     except Exception as exc:
-        print(f"\nEasyOCR pre-check failed: {exc}")
+        print(f"\nOCR pre-check failed: {exc}")
         return
 
-    print("\nEasyOCR pre-check:")
+    print("\nOCR pre-check:")
     print(json.dumps(ocr_summary, ensure_ascii=False, indent=2))
 
     if not ocr_summary["has_target_text"]:
