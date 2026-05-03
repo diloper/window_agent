@@ -1,0 +1,12 @@
+opencv-python>=4.8.0
+mss>=9.0.1
+pynput>=1.7.6
+google-api-python-client>=2.0.0
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.2.0
+google-cloud-vision>=3.7.0
+playwright>=1.52.0
+easyocr>=1.7.1
+paddleocr==3.4.1
+paddlepaddle==3.2.2

@@ -12,6 +12,7 @@ train/
 *.npz
 *.npy
 *.txt
+!requirements.txt
 # Image files
 *.png
 *.jpg
