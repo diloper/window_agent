@@ -1,5 +1,6 @@
 import argparse
 import csv
+import importlib.util
 import json
 import os
 import re
@@ -9,10 +10,47 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
-from serpapi_image_search_example import search_images
+
+
+_GOOGLE_SEARCH_RESULTS_MODULE: Optional[ModuleType] = None
+_GOOGLE_SEARCH_RESULTS_LOAD_ERROR: Optional[Exception] = None
+
+
+try:
+    _script_path = Path(__file__).with_name("google-search-results.py")
+    if not _script_path.exists():
+        raise FileNotFoundError(f"google-search-results.py not found: {_script_path}")
+
+    _spec = importlib.util.spec_from_file_location("google_search_results_script", _script_path)
+    if _spec is None or _spec.loader is None:
+        raise RuntimeError(f"Cannot load module spec from {_script_path}")
+
+    _module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+    _GOOGLE_SEARCH_RESULTS_MODULE = _module
+except Exception as exc:
+    _GOOGLE_SEARCH_RESULTS_LOAD_ERROR = exc
+
+
+def search_images(api_key: str, query: str, num: int = 10) -> Dict[str, Any]:
+    """Proxy text-query search through statically loaded google-search-results.py module."""
+    if _GOOGLE_SEARCH_RESULTS_MODULE is None:
+        raise RuntimeError(
+            f"Failed to load google-search-results.py: {_GOOGLE_SEARCH_RESULTS_LOAD_ERROR}"
+        )
+
+    params = {
+        "engine": "google_images",
+        "q": query,
+        "api_key": api_key,
+        "num": num,
+    }
+    search = _GOOGLE_SEARCH_RESULTS_MODULE.GoogleSearch(params)
+    return search.get_dict()
 
 
 TIMESTAMP_PATTERN = re.compile(r"(\d{8}_\d{6})")
