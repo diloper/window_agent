@@ -5,7 +5,7 @@
     },
     "terminal.integrated.env.windows": {
         "CONDA_DEFAULT_ENV": "base",
-        "PATH": "C:\\Users\\User\\miniconda3\\Scripts;C:\\Users\\User\\miniconda3;${PATH}"
+        "PATH": "R:\\Users\\User\\miniconda3\\Scripts;R:\\Users\\User\\miniconda3;${PATH}"
     },
     "terminal.integrated.profiles.windows": {
         "PowerShell": {
@@ -13,7 +13,7 @@
             "args": [
                 "-NoExit",
                 "-Command",
-                "& \"C:\\Users\\$env:USERNAME\\miniconda3\\Scripts\\conda.exe\" \"shell.powershell\" \"hook\" | Out-String | Invoke-Expression"
+                "& \"R:\\Users\\$env:USERNAME\\miniconda3\\Scripts\\conda.exe\" \"shell.powershell\" \"hook\" | Out-String | Invoke-Expression"
             ]
         }
     },
@@ -36,7 +36,7 @@
     },
     "python.analysis.autoImportCompletions": true,
     "python.analysis.typeCheckingMode": "basic",
-    "python.defaultInterpreterPath": "C:\\Users\\User\\miniconda3\\python.exe",
+    "python.defaultInterpreterPath": "R:\\Users\\User\\miniconda3\\python.exe",
     "python-envs.terminal.autoActivationType": "shellStartup",
     "python.terminal.activateEnvironment": true,
     "python.testing.pytestEnabled": true,
@@ -57,7 +57,7 @@
         "**/venv": true
     },
     "chat.tools.terminal.autoApprove": {
-        "C:\\Users\\User\\miniconda3\\python.exe": true,
+        "R:\\Users\\User\\miniconda3\\python.exe": true,
         "/^python -c \"import sys; print\\(sys\\.executable\\)\"$/": {
             "approve": true,
             "matchCommandLine": true
