@@ -4,6 +4,7 @@ from collections import Counter
 import json
 import os
 from pathlib import Path
+import re
 
 import requests
 from serpapi import GoogleSearch
@@ -21,6 +22,11 @@ def validate_image_url(url: str) -> None:
 def upload_local_image_to_postimg(image_path: Path) -> dict:
     """上傳圖片到 Postimages，使用 Playwright 自動化流程。回傳包含所有連結的字典。"""
     return upload_to_postimg(str(image_path), headless=True)
+
+
+def delete_uploaded_image(removal_url: str) -> None:
+    response = requests.get(removal_url, timeout=15)
+    response.raise_for_status()
 
 
 def analyze_top_repetition_from_titles(matches: list[dict]) -> dict:
@@ -76,6 +82,70 @@ def analyze_top_repetition_from_titles(matches: list[dict]) -> dict:
     }
 
 
+def analyze_local_image_with_google_lens(
+    image_path: Path,
+    api_key: str,
+    *,
+    validate_ocr: bool = True,
+    ocr_min_confidence: float = DEFAULT_OCR_MIN_CONFIDENCE,
+    ocr_engine: str = "paddleocr",
+) -> dict:
+    """Upload a local image, run Google Lens search, and return analysis details."""
+    if validate_ocr:
+        ocr_summary = detect_target_text_types(
+            image_path,
+            min_confidence=ocr_min_confidence,
+            engine=ocr_engine,
+        )
+        if not ocr_summary["has_target_text"]:
+            return {
+                "ok": False,
+                "reason": "ocr_filtered",
+                "ocr_summary": ocr_summary,
+                "results": {},
+                "visual_matches": [],
+                "top_repetition_result": {"result": "", "count": 0, "mode": "no_titles"},
+            }
+    else:
+        ocr_summary = None
+
+    params = {
+        "engine": "google_lens",
+        "url": "",
+        "api_key": api_key,
+        "hl": "en",
+        "q": "what is this",
+        "type": "all",
+        "safe": "active",
+    }
+
+    upload_result = upload_local_image_to_postimg(image_path)
+    image_url = upload_result["direct_url"]
+    removal_url = upload_result["removal_url"]
+
+    try:
+        validate_image_url(image_url)
+        params["url"] = image_url
+        search = GoogleSearch(params)
+        results = search.get_dict()
+        visual_matches = results.get("visual_matches", [])
+        top_repetition_result = analyze_top_repetition_from_titles(visual_matches)
+        return {
+            "ok": True,
+            "reason": "ok",
+            "ocr_summary": ocr_summary,
+            "results": results,
+            "visual_matches": visual_matches,
+            "top_repetition_result": top_repetition_result,
+            "image_url": image_url,
+        }
+    finally:
+        try:
+            delete_uploaded_image(removal_url)
+        except Exception:
+            pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="用 Google Lens 進行反向圖片搜尋，並分析搜尋結果")
     parser.add_argument(
@@ -120,41 +190,15 @@ def main():
     if not API_KEY:
         raise RuntimeError("Missing SERPAPI_API_KEY environment variable.")
 
-    params = {
-        "engine": "google_lens",
-        "url": "",
-        "api_key": API_KEY,
-        "hl": "en",
-        "q": "what is this",
-        "type": "all",
-        "safe": "active",
-    }
-
-    upload_result = upload_local_image_to_postimg(local_image_path)
-    image_url = upload_result["direct_url"]
-    removal_url = upload_result["removal_url"]
-    validate_image_url(image_url)
-    params["url"] = image_url
-
-    print(f"Uploaded image_url: {image_url}")
-    search = GoogleSearch(params)
-    results = search.get_dict()
-    visual_matches = results.get("visual_matches", [])
-
-    top_repetition_result = analyze_top_repetition_from_titles(visual_matches)
+    analysis = analyze_local_image_with_google_lens(
+        local_image_path,
+        API_KEY,
+        validate_ocr=False,
+    )
+    print(f"Uploaded image_url: {analysis.get('image_url', '')}")
     print("\nTop repetition result from visual_matches titles:")
-    print(json.dumps(top_repetition_result, ensure_ascii=False, indent=2))
-
-    # 得到分析結果後刪除上傳的圖片
-    print(f"\n正在刪除上傳的圖片...")
-    try:
-        response = requests.get(removal_url, timeout=15)
-        if response.status_code == 200:
-            print(f"圖片已刪除")
-        else:
-            print(f"刪除失敗，狀態碼: {response.status_code}")
-    except Exception as e:
-        print(f"刪除時發生錯誤: {e}")
+    print(json.dumps(analysis["top_repetition_result"], ensure_ascii=False, indent=2))
+    print("\n圖片已刪除")
 
 
 if __name__ == "__main__":

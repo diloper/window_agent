@@ -10,3 +10,4 @@ playwright>=1.52.0
 easyocr>=1.7.1
 paddleocr==3.4.1
 paddlepaddle==3.2.2
+onnxruntime>=1.25.1
