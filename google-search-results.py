@@ -3,12 +3,12 @@ import argparse
 from collections import Counter
 import json
 import os
-import re
 from pathlib import Path
 
 import requests
 from serpapi import GoogleSearch
 from upload_to_postimg import upload_to_postimg
+from easyocr_checker import detect_target_text_types_with_easyocr, DEFAULT_OCR_MIN_CONFIDENCE
 
 API_KEY = os.getenv("SERPAPI_API_KEY", "")
 
@@ -82,12 +82,36 @@ def main():
         "image_path",
         help="本地圖片路徑",
     )
+    parser.add_argument(
+        "--ocr-min-confidence",
+        type=float,
+        default=DEFAULT_OCR_MIN_CONFIDENCE,
+        help="EasyOCR 最低信心分數門檻，範圍 0.0 到 1.0，預設 0.6",
+    )
     args = parser.parse_args()
+
+    local_image_path = Path(args.image_path)
+
+    try:
+        ocr_summary = detect_target_text_types_with_easyocr(
+            local_image_path,
+            min_confidence=args.ocr_min_confidence,
+        )
+    except Exception as exc:
+        print(f"\nEasyOCR pre-check failed: {exc}")
+        return
+
+    print("\nEasyOCR pre-check:")
+    print(json.dumps(ocr_summary, ensure_ascii=False, indent=2))
+
+    if not ocr_summary["has_target_text"]:
+        print(
+            "\n圖片未辨識到符合門檻的中文/英文/數字，停止後續上傳與搜尋流程。"
+        )
+        return
 
     if not API_KEY:
         raise RuntimeError("Missing SERPAPI_API_KEY environment variable.")
-
-    local_image_path = Path(args.image_path)
 
     params = {
         "engine": "google_lens",
