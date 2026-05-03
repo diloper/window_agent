@@ -35,3 +35,4 @@ recordings/
 *.pyc
 model/*.onnx
 
+X-AnyLabeling-v4.0.0-beta.2-CPU.exe
