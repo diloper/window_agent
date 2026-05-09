@@ -1,78 +1,119 @@
 import os
-
+import base64
+import time
+from pathlib import Path
 from google import genai
-import PIL.Image
-
-# 設定 API Key
-api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-if not api_key:
-	raise RuntimeError("Missing API key. Set GOOGLE_API_KEY or GEMINI_API_KEY in environment variables.")
-
-client = genai.Client(api_key=api_key)
+from google.genai import errors
+from google.genai import types
 
 
-def normalize_model_name(raw_name: str) -> str:
-	if raw_name.startswith("models/"):
-		return raw_name.split("/", 1)[1]
-	return raw_name
+def build_client(api_key: str) -> genai.Client:
+    return genai.Client(api_key=api_key)
 
 
-def list_available_models() -> list[str]:
-	"""Return normalized model names from google.genai list API."""
-	names: list[str] = []
-	for m in client.models.list():
-		name = normalize_model_name(str(getattr(m, "name", "")))
-		if name:
-			names.append(name)
-	return names
+def is_retryable_internal_error(exc: Exception) -> bool:
+    if not isinstance(exc, errors.ServerError):
+        return False
+    status_code = getattr(exc, "code", None)
+    if status_code != 500:
+        return False
+    return "INTERNAL" in str(exc).upper()
 
 
-def choose_model_name(available_names: list[str]) -> str:
-	"""Prefer flash-lite model, then fallback to other flash/pro models."""
-	preferred = [
-		"gemini-3.1-flash-lite",
-		"gemini-2.5-flash-lite",
-		"gemini-2.5-flash",
-		"gemini-2.0-flash-lite",
-		"gemini-2.0-flash",
-		"gemini-1.5-flash",
-		"gemini-1.5-pro",
-	]
+def stream_with_retry(
+    api_key: str,
+    model: str,
+    contents,
+    generate_content_config: types.GenerateContentConfig,
+    max_attempts: int = 5,
+    retry_delay_seconds: int = 5,
+) -> None:
+    last_error: Exception | None = None
 
-	available_set = set(available_names)
-	for name in preferred:
-		if name in available_set:
-			return name
+    for attempt in range(1, max_attempts + 1):
+        client = build_client(api_key)
+        try:
+            for chunk in client.models.generate_content_stream(
+                model=model,
+                contents=contents,
+                config=generate_content_config,
+            ):
+                if text := chunk.text:
+                    print(text, end="")
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt < max_attempts and is_retryable_internal_error(exc):
+                retry_delay = retry_delay_seconds * (2 ** (attempt - 1))
+                print(
+                    f"\n[WARN] Gemini ServerError 500 INTERNAL encountered on attempt {attempt}/{max_attempts}. "
+                    f"Waiting {retry_delay} seconds before retrying with a new session..."
+                )
+                time.sleep(retry_delay)
+                continue
+            break
 
-	if not available_names:
-		# Fallback to requested model when list API is unavailable.
-		return preferred[0]
+    assert last_error is not None
+    raise RuntimeError(
+        f"Gemini request failed after {max_attempts} attempt(s): {last_error}"
+    ) from last_error
 
-	return sorted(available_names)[0]
+def generate():
+    api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("Missing API key. Set GOOGLE_API_KEY or GEMINI_API_KEY.")
 
+    # 1. 讀取本地圖片檔案 (例如 E.jpg)
+    image_path = "recordings/E.jpg"
+    with open(image_path, "rb") as f:
+        image_data = f.read()
 
-try:
-	available_models = list_available_models()
-except Exception as exc:
-	print(f"list models failed: {exc}")
-	available_models = []
+    image_suffix = Path(image_path).suffix.lower()
+    if image_suffix == ".png":
+        mime_type = "image/png"
+    elif image_suffix in {".jpg", ".jpeg"}:
+        mime_type = "image/jpeg"
+    else:
+        raise RuntimeError(f"Unsupported image format for MIME type detection: {image_path}")
 
-selected_model = choose_model_name(available_models)
-print(f"Using model: {selected_model}")
+    model = "gemma-4-26b-a4b-it" # 請確保您的模型支援多模態輸入
 
-# 依可用模型自動選擇，避免固定模型名稱造成 404
-# 載入圖片
-img = PIL.Image.open('recordings/D.png')
+    contents = [
+        types.Content(
+            role="user",
+            parts=[
+                # 2. 將圖片數據加入 parts
+                types.Part.from_bytes(
+                    data=image_data,
+                    mime_type=mime_type
+                ),
+                # 3. 加入您的文字問題
+                types.Part.from_text(text="Describe what the dotted red box in this image is. Please provide a brief response (e.g., a noun). If you can't identify it, reply with ‘NULL’."),
+            ],
+        ),
+    ]
 
-# 發送請求：提示詞與圖片可以同時傳入
-try:
-	response = client.models.generate_content(
-		model=selected_model,
-		# contents=["What is the dotted red box in this image?", img],
-        contents=["Describe what the dotted red box in this image is. Please keep your answer brief—use a noun, for example.", img],
-	)
-except Exception as exc:
-	print(f"generate_content failed with model {selected_model}: {exc}")
-	raise SystemExit(1)
+    tools = [
+        types.Tool(googleSearch=types.GoogleSearch()),
+    ]
 
-print(response.text)
+    generate_content_config = types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(
+            thinking_level="MINIMAL",
+        ),
+        tools=tools,
+    )
+
+    try:
+        stream_with_retry(
+            api_key=api_key,
+            model=model,
+            contents=contents,
+            generate_content_config=generate_content_config,
+        )
+    except RuntimeError as exc:
+        print(f"\n[ERROR] {exc}")
+        raise SystemExit(1)
+
+if __name__ == "__main__":
+    generate()
