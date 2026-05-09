@@ -233,9 +233,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--label-policy",
-        default="serpapi-topk",
+        default="crop-search-direct",
         choices=["serpapi-topk", "fixed", "crop-search-direct"],
-        help="Class assignment strategy",
+        help="Class assignment strategy (default: crop-search-direct)",
     )
     parser.add_argument(
         "--fixed-label",

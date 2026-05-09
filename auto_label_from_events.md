@@ -19,7 +19,7 @@
 - `--events-json`：事件 JSON
 - `--video`：對應 MP4
 - `--output-dir`：輸出資料夾，可省略
-- `--label-policy`：類別策略，支援 `crop-search-direct`、`serpapi-topk` 或 `fixed`
+- `--label-policy`：類別策略，支援 `crop-search-direct`、`serpapi-topk` 或 `fixed`（預設為 `crop-search-direct`）
 - `--class-file`：候選類別檔，預設 `classes.txt`
 - `--serpapi-api-key`：SerpApi 金鑰，也可從環境變數或 `.env` 讀取
 - `--encoder` / `--decoder`：SAM/SAM2 ONNX 模型
