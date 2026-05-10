@@ -310,6 +310,74 @@ def default_output_path(image_path):
     return os.path.splitext(image_path)[0] + ".json"
 
 
+def marked_output_path(json_output_path):
+    stem, _ = os.path.splitext(json_output_path)
+    return stem + "_marked.jpg"
+
+
+def draw_dashed_line(img, p1, p2, color, thickness=2, dash_len=10, gap_len=6):
+    x1, y1 = p1
+    x2, y2 = p2
+    length = float(np.hypot(x2 - x1, y2 - y1))
+    if length == 0:
+        return
+
+    dx = (x2 - x1) / length
+    dy = (y2 - y1) / length
+    step = dash_len + gap_len
+    dist = 0.0
+    while dist < length:
+        start_x = int(round(x1 + dx * dist))
+        start_y = int(round(y1 + dy * dist))
+        end_dist = min(dist + dash_len, length)
+        end_x = int(round(x1 + dx * end_dist))
+        end_y = int(round(y1 + dy * end_dist))
+        cv2.line(
+            img,
+            (start_x, start_y),
+            (end_x, end_y),
+            color,
+            thickness,
+            lineType=cv2.LINE_AA,
+        )
+        dist += step
+
+
+def draw_dashed_rectangle(img, x1, y1, x2, y2, color, thickness=2):
+    draw_dashed_line(img, (x1, y1), (x2, y1), color, thickness=thickness)
+    draw_dashed_line(img, (x2, y1), (x2, y2), color, thickness=thickness)
+    draw_dashed_line(img, (x2, y2), (x1, y2), color, thickness=thickness)
+    draw_dashed_line(img, (x1, y2), (x1, y1), color, thickness=thickness)
+
+
+def save_marked_full_image(image_rgb, shapes, output_path):
+    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    image_h, image_w = image_bgr.shape[:2]
+
+    for shape in shapes:
+        points = shape.get("points") or []
+        if not points:
+            continue
+
+        xs = [int(round(p[0])) for p in points if len(p) >= 2]
+        ys = [int(round(p[1])) for p in points if len(p) >= 2]
+        if not xs or not ys:
+            continue
+
+        x1 = max(0, min(xs))
+        y1 = max(0, min(ys))
+        x2 = min(image_w - 1, max(xs))
+        y2 = min(image_h - 1, max(ys))
+
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        # Red dashed rectangle in BGR for visibility on the full image.
+        draw_dashed_rectangle(image_bgr, x1, y1, x2, y2, color=(0, 0, 255), thickness=2)
+
+    cv2.imwrite(output_path, image_bgr)
+
+
 def main():
     args = parse_args()
 
@@ -346,7 +414,11 @@ def main():
     with open(output_path, "w", encoding="utf-8") as fp:
         json.dump(payload, fp, indent=2, ensure_ascii=False)
 
+    marked_path = marked_output_path(output_path)
+    save_marked_full_image(image_rgb, shapes, marked_path)
+
     print(f"[INFO] Saved {len(shapes)} shape(s) to: {output_path}")
+    print(f"[INFO] Saved marked image to: {marked_path}")
 
 
 if __name__ == "__main__":

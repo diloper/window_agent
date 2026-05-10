@@ -67,7 +67,7 @@
 `extract_sample_frames()` 會：
 
 - 從影片讀取指定 frame
-- 輸出到 `images/`
+- 輸出原始未標記圖片到 `images/`
 - 預先決定對應的 LabelMe JSON 路徑
 
 輸出檔名格式類似：
@@ -91,6 +91,8 @@
 如果成功：
 
 - `sample.status = "ok"`
+- 同步產生整張標記圖 `<annotation_stem>_marked.jpg`（所有辨識框紅色虛線）
+- 將標記圖移到 `marked/`，與 `images/` 原圖分開存放
 
 如果失敗：
 
@@ -173,7 +175,8 @@
 
 裡面包含：
 
-- `images/`：抽出的影格
+- `images/`：抽出的原始影格（未標記）
+- `marked/`：整張圖紅色虛線框預覽
 - `annotations_labelme/`：LabelMe JSON
 - `crops/`：依第一個 shape 裁出的搜尋用圖片
 - `labels/`：YOLO TXT

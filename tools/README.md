@@ -88,6 +88,11 @@ python tools/autolabel.py \
 
 輸出為 **LabelMe JSON** 格式，可直接用 X-AnyLabeling GUI **File → Open Dir** 載入驗證。
 
+另外，`autolabel.py` 也會在同目錄額外輸出一張完整原圖預覽：
+
+- 檔名：`<output_stem>_marked.jpg`
+- 內容：將所有辨識 shape 的外接框以**紅色虛線框**標記在整張圖上
+
 ```json
 {
   "version": "5.0.0",

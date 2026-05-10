@@ -78,6 +78,7 @@ class FrameSample:
     frame_index: int
     image_path: Path
     annotation_path: Path
+    marked_path: Optional[Path] = None
     status: str = "pending"
     error: str = ""
     inferred_label: str = ""
@@ -498,6 +499,19 @@ def run_autolabel_for_sample(
     return True, ""
 
 
+def move_marked_preview(sample: FrameSample, marked_dir: Path) -> None:
+    marked_src = sample.annotation_path.with_name(f"{sample.annotation_path.stem}_marked.jpg")
+    if not marked_src.exists():
+        sample.marked_path = None
+        return
+
+    marked_dst = marked_dir / marked_src.name
+    if marked_dst.exists():
+        marked_dst.unlink()
+    marked_src.replace(marked_dst)
+    sample.marked_path = marked_dst
+
+
 def load_candidates(class_file: Path) -> List[str]:
     if not class_file.exists():
         return []
@@ -752,6 +766,7 @@ def write_manifest(samples: Sequence[FrameSample], path: Path) -> None:
         "y",
         "image_path",
         "annotation_path",
+        "marked_path",
         "crop_path",
         "crop_width",
         "crop_height",
@@ -776,6 +791,7 @@ def write_manifest(samples: Sequence[FrameSample], path: Path) -> None:
                     "y": s.y,
                     "image_path": str(s.image_path),
                     "annotation_path": str(s.annotation_path),
+                    "marked_path": str(s.marked_path) if s.marked_path else "",
                     "crop_path": str(s.crop_path) if s.crop_path else "",
                     "crop_width": s.crop_width,
                     "crop_height": s.crop_height,
@@ -818,11 +834,13 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     images_dir = output_dir / "images"
     anno_dir = output_dir / "annotations_labelme"
+    marked_dir = output_dir / "marked"
     crops_dir = output_dir / "crops"
     labels_dir = output_dir / "labels"
     reports_dir = output_dir / "reports"
     images_dir.mkdir(parents=True, exist_ok=True)
     anno_dir.mkdir(parents=True, exist_ok=True)
+    marked_dir.mkdir(parents=True, exist_ok=True)
     crops_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -878,6 +896,7 @@ def main() -> int:
             ok, err = run_autolabel_for_sample(sample, args, sys.executable)
             if ok:
                 sample.status = "ok"
+                move_marked_preview(sample, marked_dir)
             else:
                 sample.status = "failed"
                 sample.error = err
@@ -977,6 +996,7 @@ def main() -> int:
         "frame_count": frame_count,
         "output_dir": str(output_dir),
         "images_dir": str(images_dir),
+        "marked_dir": str(marked_dir),
         "annotations_dir": str(anno_dir),
         "crops_dir": str(crops_dir),
         "labels_dir": str(labels_dir),
