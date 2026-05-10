@@ -90,7 +90,7 @@ C:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
 
 - `--window-before-ms`、`--window-after-ms`：事件前後抽幀時間窗
 - `--max-frames-per-event`：每個事件最多抽樣幀數
-- `--label-policy local-topk|fixed`：類別策略（本地 Top-k 投票或固定類別）
+- `--label-policy serpapi-topk|fixed|crop-search-direct`：類別策略（預設為 `crop-search-direct`，使用 Google Lens 並直接採用 `top_repetition_result`）
 - `--skip-autolabel`：只抽幀與產生報表，不跑 ONNX 推論
 
 ## SerpApi Image Search Example / SerpApi 圖片搜尋範例

@@ -14,7 +14,7 @@
 		{
 			"label": "prepare-colab-dataset",
 			"type": "shell",
-			"command": "C:\\Users\\User\\miniconda3\\python.exe",
+			"command": "R:\\Users\\User\\miniconda3\\python.exe",
 			"args": [
 				"auto_prepare_dataset.py"
 			],
