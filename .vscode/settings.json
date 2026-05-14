@@ -1,69 +1,31 @@
 {
+    // 1) 用一般 PowerShell
     "terminal.integrated.defaultProfile.windows": "PowerShell",
-    "terminal.integrated.automationProfile.windows": {
-        "path": "powershell.exe"
-    },
-    "terminal.integrated.env.windows": {
-        "CONDA_DEFAULT_ENV": "base",
-        "PATH": "R:\\Users\\User\\miniconda3\\Scripts;R:\\Users\\User\\miniconda3;${PATH}"
-    },
     "terminal.integrated.profiles.windows": {
         "PowerShell": {
             "path": "powershell.exe",
             "args": [
-                "-NoExit",
-                "-Command",
-                "& \"R:\\Users\\$env:USERNAME\\miniconda3\\Scripts\\conda.exe\" \"shell.powershell\" \"hook\" | Out-String | Invoke-Expression"
+                "-NoExit"
             ]
         }
     },
+    // 2) 指定 uv 產生的 venv interpreter
+    "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+    // 3) 不要讓 VS Code 自動去 activate conda/venv（避免跟 uv 打架）
+    "python.terminal.activateEnvironment": true,
+    "python-envs.terminal.autoActivationType": "disabled",
+    // 4)（可選）uv 參數：避免 hardlink 警告、或你有 proxy/cert 需求可以放這
+    "terminal.integrated.env.windows": {
+        "HTTP_PROXY": "${env:MY_PROXY}",
+        "HTTPS_PROXY": "${env:MY_PROXY}",
+        "UV_LINK_MODE": "copy",
+        "PYTHONNOUSERSITE": "1"
+    },
+    // 其餘你的格式化設定照舊
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
         "source.fixAll": "explicit",
         "source.organizeImports": "explicit"
     },
-    "files.encoding": "utf8",
-    "files.insertFinalNewline": true,
-    "files.trimTrailingWhitespace": true,
-    "files.exclude": {
-        "**/.DS_Store": true,
-        "**/__pycache__": true,
-        "**/.mypy_cache": true,
-        "**/.pytest_cache": true,
-        "**/.ruff_cache": true,
-        "**/.venv": true,
-        "**/venv": true
-    },
-    "python.analysis.autoImportCompletions": true,
-    "python.analysis.typeCheckingMode": "basic",
-    "python.defaultInterpreterPath": "R:\\Users\\User\\miniconda3\\python.exe",
-    "python-envs.terminal.autoActivationType": "shellStartup",
-    "python.terminal.activateEnvironment": true,
-    "python.testing.pytestEnabled": true,
-    "python.testing.unittestEnabled": false,
-    "python.testing.pytestArgs": [
-        "."
-    ],
-    "search.exclude": {
-        "**/.git": true,
-        "**/node_modules": true,
-        "**/dist": true,
-        "**/build": true,
-        "**/__pycache__": true,
-        "**/.mypy_cache": true,
-        "**/.pytest_cache": true,
-        "**/.ruff_cache": true,
-        "**/.venv": true,
-        "**/venv": true
-    },
-    "chat.tools.terminal.autoApprove": {
-        "R:\\Users\\User\\miniconda3\\python.exe": true,
-        "/^python -c \"import sys; print\\(sys\\.executable\\)\"$/": {
-            "approve": true,
-            "matchCommandLine": true
-        },
-        "git checkout": true,
-        "Test-Path": true,
-        "&": true
-    }
+    "files.encoding": "utf8"
 }
