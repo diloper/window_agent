@@ -3,10 +3,12 @@ import mss
 import json
 import signal
 import threading
+import time
 import numpy as np
 from datetime import datetime
 from pynput import mouse, keyboard
 from pathlib import Path
+import argparse
 
 
 class ScreenEventRecorder:
@@ -135,8 +137,12 @@ class ScreenEventRecorder:
         if pressed:
             print(f"滑鼠點擊: {button} at ({x}, {y})")
 
-    def start_recording(self, duration_seconds=30):
+    def start_recording(self, duration_seconds=60, countdown_seconds=5):
         """開始同時錄製螢幕與事件"""
+        for remaining in range(countdown_seconds, 0, -1):
+            print(f"錄影將在 {remaining} 秒後開始...")
+            time.sleep(1)
+        print("開始錄影！")
         self.recording = True
         self.events = []
         self.modifier_state = {'ctrl': False, 'shift': False, 'alt': False}
@@ -179,6 +185,8 @@ class ScreenEventRecorder:
 
 
 if __name__ == "__main__":
-    # 範例：錄製 30 秒
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--duration", type=int, default=60, help="錄影秒數 (預設60秒)")
+    args = parser.parse_args()
     recorder = ScreenEventRecorder()
-    recorder.start_recording(duration_seconds=30)
+    recorder.start_recording(duration_seconds=args.duration)

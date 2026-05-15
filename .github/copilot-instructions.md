@@ -7,6 +7,7 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - For Python requests, inspect the relevant workspace files before asking clarifying questions when the codebase can answer them.
 - Prefer completing the task end-to-end when the request is actionable: explore, edit, and verify instead of stopping at a partial plan.
 - Keep edits minimal and consistent with the current script-oriented style. Avoid unrelated refactors.
+- When modifying Python files, avoid duplicate import statements; reuse existing imports and keep each module imported only once.
 - State assumptions briefly only when they materially affect the result.
 - For any code change, create and work on a temporary branch first.
 - Never merge into `main` automatically; merge only after explicit human approval.
