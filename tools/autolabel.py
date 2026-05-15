@@ -372,8 +372,8 @@ def save_marked_full_image(image_rgb, shapes, output_path):
         if x2 <= x1 or y2 <= y1:
             continue
 
-        # Red dashed rectangle in BGR for visibility on the full image.
-        draw_dashed_rectangle(image_bgr, x1, y1, x2, y2, color=(0, 0, 255), thickness=2)
+        # Red solid rectangle in BGR for visibility on the full image.
+        cv2.rectangle(image_bgr, (x1, y1), (x2, y2), color=(0, 0, 255), thickness=2, lineType=cv2.LINE_8)
 
     cv2.imwrite(output_path, image_bgr)
 

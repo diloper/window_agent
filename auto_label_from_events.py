@@ -185,8 +185,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--events-json",
-        required=True,
-        help="Path to events_*.json recorded by screen_event_recorder.py",
+        required=False,
+        default=None,
+        help="Path to events_*.json recorded by screen_event_recorder.py. If not specified, will be inferred from --video filename.",
     )
     parser.add_argument(
         "--video",
@@ -218,12 +219,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--encoder",
-        default=r"R:/SAM/model/sam2_hiera_tiny_encoder.onnx",
+        default=r"model/sam2_hiera_tiny_encoder.onnx",
         help="Encoder ONNX path for tools/autolabel.py",
     )
     parser.add_argument(
         "--decoder",
-        default=r"R:/SAM/model/sam2_hiera_tiny_decoder.onnx",
+        default=r"model/sam2_hiera_tiny_decoder.onnx",
         help="Decoder ONNX path for tools/autolabel.py",
     )
     parser.add_argument(
@@ -809,8 +810,32 @@ def main() -> int:
 
     load_dotenv_file(Path(args.dotenv_path))
 
-    events_json = Path(args.events_json)
     video_path = Path(args.video)
+    # Infer events_json if not provided
+    if args.events_json is None:
+        # Try to extract timestamp from video filename
+        m = re.match(r"screen_(\d{8}_\d{6})\\.mp4$|screen_(\d{8}_\d{6})\.mp4$", video_path.name)
+        timestamp = None
+        if m:
+            timestamp = m.group(1) or m.group(2)
+        if timestamp:
+            # Prefer events file in same dir as video, else try recordings/
+            candidate1 = video_path.parent / f"events_{timestamp}.json"
+            candidate2 = Path("recordings") / f"events_{timestamp}.json"
+            if candidate1.exists():
+                events_json = candidate1
+            elif candidate2.exists():
+                events_json = candidate2
+            else:
+                print(f"[ERROR] Could not find events JSON file for timestamp {timestamp}. Tried: {candidate1}, {candidate2}")
+                return 1
+            print(f"[auto] Using events JSON: {events_json}")
+        else:
+            print(f"[ERROR] Could not infer events JSON filename from video: {video_path.name}")
+            return 1
+    else:
+        events_json = Path(args.events_json)
+
     if args.output_dir:
         output_dir = Path(args.output_dir)
     else:

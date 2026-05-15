@@ -16,8 +16,8 @@
 
 程式先從命令列讀取：
 
-- `--events-json`：事件 JSON
-- `--video`：對應 MP4
+- `--video`：對應 MP4（必填）
+- `--events-json`：事件 JSON（可省略，預設自動推導與 `--video` 同場錄製的檔名）
 - `--output-dir`：輸出資料夾，可省略
 - `--label-policy`：類別策略，支援 `crop-search-direct`、`serpapi-topk` 或 `fixed`（預設為 `crop-search-direct`）
 - `--class-file`：候選類別檔，預設 `classes.txt`
@@ -91,7 +91,7 @@
 如果成功：
 
 - `sample.status = "ok"`
-- 同步產生整張標記圖 `<annotation_stem>_marked.jpg`（所有辨識框紅色虛線）
+- 同步產生整張標記圖 `<annotation_stem>_marked.jpg`（所有辨識框紅色實線）
 - 將標記圖移到 `marked/`，與 `images/` 原圖分開存放
 
 如果失敗：
@@ -176,7 +176,7 @@
 裡面包含：
 
 - `images/`：抽出的原始影格（未標記）
-- `marked/`：整張圖紅色虛線框預覽
+- `marked/`：整張圖紅色實線框預覽
 - `annotations_labelme/`：LabelMe JSON
 - `crops/`：依第一個 shape 裁出的搜尋用圖片
 - `labels/`：YOLO TXT
@@ -212,12 +212,15 @@
 
 ## 範例指令
 
+
 ```bat
 R:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
-  --events-json recordings\events_20260501_165101.json ^
   --video recordings\screen_20260501_165101.mp4 ^
   --label-policy crop-search-direct
 ```
+
+如未指定 `--events-json`，程式會自動推導 `recordings/events_YYYYMMDD_HHMMSS.json`（與 `--video` 檔名時間戳一致）。
+若有特殊需求仍可手動指定 `--events-json`。
 
 ## 目前適用版本說明
 
@@ -229,13 +232,15 @@ R:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
 
 ## 範例指令
 
+
 ```bat
-R:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
-  --events-json recordings\events_20260501_165101.json ^
-  --video recordings\screen_20260501_165101.mp4 ^
-  --label-policy serpapi-topk
-```
+python.exe auto_label_from_events.py `
+  --video recordings\screen_20260501_165101.mp4 `
   --label-policy crop-search-direct
+```
+
+如未指定 `--events-json`，會自動推導與 `--video` 同場錄製的 events 檔案。
+
 ## 目前適用版本說明
 
 依目前專案狀態，這支程式的關鍵依賴關係如下：
