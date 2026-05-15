@@ -186,7 +186,7 @@ class ScreenEventRecorder:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--duration", type=int, default=60, help="錄影秒數 (預設60秒)")
+    parser.add_argument("-d", "--duration", type=int, default=60, help="錄影秒數 (預設60秒)")
     args = parser.parse_args()
     recorder = ScreenEventRecorder()
     recorder.start_recording(duration_seconds=args.duration)
