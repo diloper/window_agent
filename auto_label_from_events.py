@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 
+import genai as genai_helper
+
 
 _GOOGLE_SEARCH_RESULTS_MODULE: Optional[ModuleType] = None
 _GOOGLE_SEARCH_RESULTS_LOAD_ERROR: Optional[Exception] = None
@@ -55,6 +57,10 @@ def search_images(api_key: str, query: str, num: int = 10) -> Dict[str, Any]:
 
 
 TIMESTAMP_PATTERN = re.compile(r"(\d{8}_\d{6})")
+GENAI_MARKED_PROMPT = (
+    "Please inspect the UI element inside the red rectangle in this marked image and "
+    "identify the icon or control name. Give a brief answer only. If you cannot identify it, reply with 'NULL'."
+)
 
 
 @dataclass
@@ -235,9 +241,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--label-policy",
-        default="crop-search-direct",
-        choices=["serpapi-topk", "fixed", "crop-search-direct"],
-        help="Class assignment strategy (default: crop-search-direct)",
+        default="genai-marked-direct",
+        choices=["serpapi-topk", "fixed", "crop-search-direct", "genai-marked-direct"],
+        help="Class assignment strategy (default: genai-marked-direct)",
     )
     parser.add_argument(
         "--fixed-label",
@@ -297,6 +303,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-autolabel",
         action="store_true",
         help="Only sample frames and emit manifest without running autolabel",
+    )
+    parser.add_argument(
+        "--genai-model",
+        default=genai_helper.DEFAULT_MODEL,
+        help="Gemini model used by --label-policy genai-marked-direct",
     )
     return parser.parse_args()
 
@@ -641,6 +652,33 @@ def infer_sample_label_from_crop(
     return search_label
 
 
+def infer_sample_label_from_marked_with_genai(
+    sample: FrameSample,
+    fallback_label: str,
+    model: str,
+    api_key: str,
+) -> str:
+    marked_path = sample.marked_path
+    if marked_path is None or not marked_path.exists():
+        raise FileNotFoundError("Marked image not found for genai analysis")
+
+    raw_response = genai_helper.analyze_image_file(
+        marked_path,
+        prompt=GENAI_MARKED_PROMPT,
+        model=model,
+        api_key=api_key,
+    )
+    response = sanitize_label_name(raw_response, "")
+    if not response or response.upper() == "NULL":
+        sample.search_label = fallback_label
+        sample.search_status = "genai_null"
+        return fallback_label
+
+    sample.search_label = response
+    sample.search_status = "genai_marked_ok"
+    return response
+
+
 def pick_topk(scores: Dict[str, float], k: int) -> List[Tuple[str, float]]:
     return sorted(scores.items(), key=lambda x: (-x[1], x[0]))[: max(1, k)]
 
@@ -929,6 +967,7 @@ def main() -> int:
 
     fallback_label = args.fixed_label or "object"
     serpapi_key = args.serpapi_api_key or os.getenv("SERPAPI_API_KEY", "")
+    genai_api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY", "")
 
     if args.label_policy == "fixed":
         event_labels = {event.event_id: fallback_label for event in events}
@@ -952,6 +991,32 @@ def main() -> int:
                     sample.search_status = sample.search_status or "ok"
                 except Exception as exc:
                     sample.search_status = "crop_search_failed"
+                    sample.error = str(exc)
+                    sample.search_label = fallback_label
+    elif args.label_policy == "genai-marked-direct":
+        event_labels = {}
+        if not genai_api_key:
+            print("[WARN] GOOGLE_API_KEY or GEMINI_API_KEY is missing; fallback to fixed label policy")
+            for sample in samples:
+                sample.search_status = "missing_genai_api_key"
+        else:
+            for sample in samples:
+                if sample.status != "ok":
+                    continue
+                try:
+                    sample.search_label = infer_sample_label_from_marked_with_genai(
+                        sample,
+                        fallback_label,
+                        args.genai_model,
+                        genai_api_key,
+                    )
+                    sample.search_status = sample.search_status or "genai_marked_ok"
+                except FileNotFoundError as exc:
+                    sample.search_status = "missing_marked_image"
+                    sample.error = str(exc)
+                    sample.search_label = fallback_label
+                except Exception as exc:
+                    sample.search_status = "genai_failed"
                     sample.error = str(exc)
                     sample.search_label = fallback_label
     else:
@@ -978,7 +1043,7 @@ def main() -> int:
             )
 
     for sample in samples:
-        if args.label_policy == "crop-search-direct":
+        if args.label_policy in {"crop-search-direct", "genai-marked-direct"}:
             label = sample.search_label or fallback_label
         else:
             label = event_labels.get(sample.event_id, fallback_label)

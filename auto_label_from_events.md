@@ -19,7 +19,7 @@
 - `--video`：對應 MP4（必填）
 - `--events-json`：事件 JSON（可省略，預設自動推導與 `--video` 同場錄製的檔名）
 - `--output-dir`：輸出資料夾，可省略
-- `--label-policy`：類別策略，支援 `crop-search-direct`、`serpapi-topk` 或 `fixed`（預設為 `crop-search-direct`）
+- `--label-policy`：類別策略，支援 `crop-search-direct`、`genai-marked-direct`、`serpapi-topk` 或 `fixed`（預設為 `genai-marked-direct`）
 - `--class-file`：候選類別檔，預設 `classes.txt`
 - `--serpapi-api-key`：SerpApi 金鑰，也可從環境變數或 `.env` 讀取
 - `--encoder` / `--decoder`：SAM/SAM2 ONNX 模型
@@ -28,7 +28,7 @@
 
 `load_dotenv_file()` 會讀 `.env`，把尚未存在於環境中的變數寫入 `os.environ`。
 
-目前主要用來補 `SERPAPI_API_KEY`。
+目前主要用來補 `SERPAPI_API_KEY`、`GOOGLE_API_KEY` 或 `GEMINI_API_KEY`。
 
 ### 3. 檢查事件檔與影片是否屬於同一場錄製
 
@@ -119,13 +119,28 @@
 
 ### 2. serpapi-topk
 
+### 2. genai-marked-direct
+
+這是新的 marked image 命名流程。
+
+當 `run_autolabel_for_sample()` 成功產生 `marked/<annotation_stem>_marked.jpg` 後，程式會：
+
+- 直接讀取整張 marked image
+- 呼叫 `genai.py` 內的 Gemini 多模態分析函式
+- 要求模型觀察紅色框出的 UI 元件並回傳簡短名稱
+- 若模型回傳有效文字，直接作為最終 label
+
+若缺少 `GOOGLE_API_KEY` / `GEMINI_API_KEY`、marked image 不存在、模型回傳 `NULL` 或分析失敗，則退回 `--fixed-label`。
+
+### 3. serpapi-topk
+
 這是舊版策略。若有 SerpApi 金鑰，程式會使用 `SerpApiClassProvider`，把 `classes.txt` 當作候選類別清單，依搜尋結果中的 token overlap 做分數比對與事件投票。
 
-### 3. fixed
+### 4. fixed
 
 所有事件都直接套用 `--fixed-label`。
 
-### 4. `search_images()` 來源
+### 5. `search_images()` 來源
 
 目前 `auto_label_from_events.py` 不再引用舊的 `serpapi_image_search_example.py`。
 
@@ -167,6 +182,14 @@
 - `search_label`
 - `search_status`
 
+其中當 `--label-policy genai-marked-direct` 時，`search_status` 可能出現：
+
+- `genai_marked_ok`
+- `missing_genai_api_key`
+- `missing_marked_image`
+- `genai_null`
+- `genai_failed`
+
 ## 輸出目錄結構
 
 預設輸出目錄：
@@ -178,7 +201,7 @@
 - `images/`：抽出的原始影格（未標記）
 - `marked/`：整張圖紅色實線框預覽
 - `annotations_labelme/`：LabelMe JSON
-- `crops/`：依第一個 shape 裁出的搜尋用圖片
+- `crops/`：依第一個 shape 裁出的搜尋用圖片（`crop-search-direct` 使用）
 - `labels/`：YOLO TXT
 - `reports/manifest.csv`：逐樣本清單
 - `reports/run_report.json`：執行摘要
@@ -202,11 +225,15 @@
 
 若選 `crop-search-direct` 或 `serpapi-topk` 但沒提供金鑰，程式會退回固定類別策略。
 
-### 5. `classes.txt` 沒內容或不存在
+### 5. 沒有 `GOOGLE_API_KEY` / `GEMINI_API_KEY`
+
+若選 `genai-marked-direct` 但沒提供 Gemini API 金鑰，程式會退回固定類別策略。
+
+### 6. `classes.txt` 沒內容或不存在
 
 若候選類別為空，舊的 `serpapi-topk` 會退回只使用 fallback label。
 
-### 6. 標註框無效或裁切失敗
+### 7. 標註框無效或裁切失敗
 
 若 LabelMe JSON 沒有 shape、第一個 shape 無法轉成有效 bbox，或裁切區域為空，樣本會退回 fallback label。
 
@@ -221,6 +248,16 @@ R:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
 
 如未指定 `--events-json`，程式會自動推導 `recordings/events_YYYYMMDD_HHMMSS.json`（與 `--video` 檔名時間戳一致）。
 若有特殊需求仍可手動指定 `--events-json`。
+
+若要改用 Gemini 分析整張 marked image，可執行：
+
+```bat
+python.exe auto_label_from_events.py ^
+  --video recordings\screen_20260501_165101.mp4 ^
+  --label-policy genai-marked-direct
+```
+
+此模式需先提供 `GOOGLE_API_KEY` 或 `GEMINI_API_KEY`。
 
 ## 目前適用版本說明
 
@@ -240,6 +277,16 @@ python.exe auto_label_from_events.py `
 ```
 
 如未指定 `--events-json`，會自動推導與 `--video` 同場錄製的 events 檔案。
+
+若要改用 Gemini 分析整張 marked image：
+
+```bat
+python.exe auto_label_from_events.py `
+  --video recordings\screen_20260501_165101.mp4 `
+  --label-policy genai-marked-direct
+```
+
+此模式需先提供 `GOOGLE_API_KEY` 或 `GEMINI_API_KEY`。
 
 ## 目前適用版本說明
 
