@@ -64,7 +64,7 @@ def generate():
         raise RuntimeError("Missing API key. Set GOOGLE_API_KEY or GEMINI_API_KEY.")
 
     # 1. 讀取本地圖片檔案 (例如 E.jpg)
-    image_path = "recordings/E.jpg"
+    image_path = "tools/red box.jpg"
     with open(image_path, "rb") as f:
         image_data = f.read()
 
@@ -88,7 +88,8 @@ def generate():
                     mime_type=mime_type
                 ),
                 # 3. 加入您的文字問題
-                types.Part.from_text(text="Describe what the dotted red box in this image is. Please provide a brief response (e.g., a noun). If you can't identify it, reply with ‘NULL’."),
+                types.Part.from_text(text="Please look at the red box in this image and try to identify the name of the icon inside it. Give a brief answer. If you can't identify it, reply with ‘NULL’."),
+                #types.Part.from_text(text="Please look at the red box below this image and try to identify the name of the icon inside it. Give a brief answer. If you can't identify it, reply with ‘NULL’."),
             ],
         ),
     ]
