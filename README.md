@@ -69,6 +69,11 @@ Output:
 
 新增 `auto_label_from_events.py`，可將 `recordings/events_*.json` 與 `recordings/screen_*.mp4` 對齊後，抽取事件附近影格，呼叫 `tools/autolabel.py` 產生 LabelMe，並輸出 YOLO 標註到預覽資料夾。
 
+事件檔格式目前為 NDJSON（JSON Lines）：每行一筆事件，`timestamp` 為相對錄影起點秒數（float）。
+若存在同場錄製的 `frames_*.jsonl`（每幀時間軸），`auto_label_from_events.py` 會優先使用它做更精準的對齊。
+
+錄影器會在開始時寫入同步標記事件 `sync_marker_start`，並在短時間後寫入 `sync_marker_end`，同時在影片左上角疊加紅色標記區塊，可用於人工校準零點。可用 `--sync-marker-ms` 調整標記持續時間。
+
 ### Quick Run / 快速執行
 
 ```bat

@@ -1,4 +1,5 @@
 import argparse
+import bisect
 import csv
 import importlib.util
 import json
@@ -331,51 +332,63 @@ def ensure_matching_session(events_json: Path, video_path: Path) -> datetime:
     return video_ts
 
 
-def parse_iso_timestamp(raw: str) -> datetime:
+def parse_event_timestamp(raw: Any) -> float:
     try:
-        return datetime.fromisoformat(raw)
-    except ValueError as exc:
-        raise ValueError(f"Invalid event timestamp: {raw}") from exc
+        return float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid event timestamp float: {raw}") from exc
 
 
 def load_mouse_events(
     events_json: Path,
-    video_start_dt: datetime,
     button_filter: str,
 ) -> List[MouseEvent]:
-    with events_json.open("r", encoding="utf-8") as fp:
-        payload = json.load(fp)
-
     events: List[MouseEvent] = []
     next_id = 1
-    for item in payload:
-        t = item.get("type", "")
-        if t not in {"mouse_press", "mouse_release"}:
-            continue
+    with events_json.open("r", encoding="utf-8") as fp:
+        for line_no, line in enumerate(fp, start=1):
+            raw = line.strip()
+            if not raw:
+                continue
+            if line_no == 1 and raw.startswith("["):
+                raise ValueError(
+                    "Legacy JSON array events format is not supported. Please use recorder output in NDJSON format."
+                )
 
-        button = str(item.get("button", "")).lower()
-        if button_filter != "any" and button != button_filter:
-            continue
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid NDJSON event at line {line_no}: {exc.msg}") from exc
 
-        if "x" not in item or "y" not in item or "timestamp" not in item:
-            continue
+            if not isinstance(item, dict):
+                raise ValueError(f"Invalid NDJSON event at line {line_no}: expected object")
 
-        dt = parse_iso_timestamp(item["timestamp"])
-        rel_seconds = (dt - video_start_dt).total_seconds()
-        if rel_seconds < 0:
-            continue
+            t = item.get("type", "")
+            if t not in {"mouse_press", "mouse_release"}:
+                continue
 
-        events.append(
-            MouseEvent(
-                event_id=next_id,
-                event_type=t,
-                x=int(item["x"]),
-                y=int(item["y"]),
-                timestamp_iso=str(item["timestamp"]),
-                rel_seconds=rel_seconds,
+            button = str(item.get("button", "")).lower()
+            if button_filter != "any" and button != button_filter:
+                continue
+
+            if "x" not in item or "y" not in item or "timestamp" not in item:
+                continue
+
+            rel_seconds = parse_event_timestamp(item["timestamp"])
+            if rel_seconds < 0:
+                continue
+
+            events.append(
+                MouseEvent(
+                    event_id=next_id,
+                    event_type=t,
+                    x=int(item["x"]),
+                    y=int(item["y"]),
+                    timestamp_iso=str(item["timestamp"]),
+                    rel_seconds=rel_seconds,
+                )
             )
-        )
-        next_id += 1
+            next_id += 1
 
     return events
 
@@ -405,15 +418,40 @@ def build_frame_plan(
     before_ms: int,
     after_ms: int,
     max_frames_per_event: int,
+    frame_timestamps: Optional[Sequence[float]] = None,
 ) -> List[Tuple[MouseEvent, int]]:
     plan: List[Tuple[MouseEvent, int]] = []
     before_frames = max(0, int(round(before_ms * fps / 1000.0)))
     after_frames = max(0, int(round(after_ms * fps / 1000.0)))
 
+    use_timeline = bool(frame_timestamps) and len(frame_timestamps) == frame_count
+
+    def nearest_frame_index(ts: float) -> int:
+        assert frame_timestamps is not None
+        idx = bisect.bisect_left(frame_timestamps, ts)
+        if idx <= 0:
+            return 0
+        if idx >= len(frame_timestamps):
+            return len(frame_timestamps) - 1
+        prev_i = idx - 1
+        if abs(frame_timestamps[idx] - ts) < abs(ts - frame_timestamps[prev_i]):
+            return idx
+        return prev_i
+
     for event in events:
-        center = int(round(event.rel_seconds * fps))
-        start = max(0, center - before_frames)
-        end = min(frame_count - 1, center + after_frames)
+        if use_timeline:
+            center = nearest_frame_index(event.rel_seconds)
+            start_ts = max(0.0, event.rel_seconds - (before_ms / 1000.0))
+            end_ts = event.rel_seconds + (after_ms / 1000.0)
+            start = nearest_frame_index(start_ts)
+            end = nearest_frame_index(end_ts)
+            if end < start:
+                start, end = end, start
+        else:
+            center = int(round(event.rel_seconds * fps))
+            start = max(0, center - before_frames)
+            end = min(frame_count - 1, center + after_frames)
+
         sampled = even_sample(start, end, max_frames_per_event)
         for idx in sampled:
             plan.append((event, idx))
@@ -423,6 +461,65 @@ def build_frame_plan(
         unique[(event.event_id, frame_idx)] = (event, frame_idx)
 
     return sorted(unique.values(), key=lambda p: (p[0].event_id, p[1]))
+
+
+def infer_frames_timeline_path(events_json: Path, video_path: Path) -> Optional[Path]:
+    events_ts = extract_name_timestamp(events_json)
+    video_ts = extract_name_timestamp(video_path)
+    ts = events_ts or video_ts
+    if not ts:
+        return None
+
+    timeline_name = f"frames_{ts.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    candidate1 = events_json.parent / timeline_name
+    candidate2 = video_path.parent / timeline_name
+    if candidate1.exists():
+        return candidate1
+    if candidate2.exists():
+        return candidate2
+    return None
+
+
+def load_frame_timestamps(frames_timeline_path: Path, expected_frame_count: int) -> Optional[List[float]]:
+    timestamps: List[float] = []
+    expected_index = 0
+
+    with frames_timeline_path.open("r", encoding="utf-8") as fp:
+        for line_no, line in enumerate(fp, start=1):
+            raw = line.strip()
+            if not raw:
+                continue
+
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid frame timeline at line {line_no}: {exc.msg}") from exc
+
+            if not isinstance(item, dict):
+                raise ValueError(f"Invalid frame timeline at line {line_no}: expected object")
+
+            if "frame_index" not in item or "timestamp" not in item:
+                raise ValueError(f"Invalid frame timeline at line {line_no}: missing frame_index or timestamp")
+
+            frame_index = int(item["frame_index"])
+            if frame_index != expected_index:
+                raise ValueError(
+                    f"Invalid frame timeline at line {line_no}: frame_index {frame_index} is not contiguous (expected {expected_index})"
+                )
+
+            timestamps.append(parse_event_timestamp(item["timestamp"]))
+            expected_index += 1
+
+    if not timestamps:
+        return None
+
+    if expected_frame_count > 0 and len(timestamps) != expected_frame_count:
+        print(
+            f"[WARN] Frame timeline size mismatch. timeline={len(timestamps)} video_frames={expected_frame_count}. Fallback to FPS mapping."
+        )
+        return None
+
+    return timestamps
 
 
 def extract_sample_frames(
@@ -889,7 +986,7 @@ def main() -> int:
         return 1
 
     try:
-        video_start_dt = ensure_matching_session(events_json, video_path)
+        ensure_matching_session(events_json, video_path)
     except Exception as exc:
         print(f"[ERROR] {exc}")
         return 1
@@ -908,7 +1005,7 @@ def main() -> int:
     labels_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    events = load_mouse_events(events_json, video_start_dt, args.button)
+    events = load_mouse_events(events_json, args.button)
     if not events:
         print("[ERROR] No mouse events found after filtering.")
         return 1
@@ -925,6 +1022,16 @@ def main() -> int:
         print(f"[ERROR] Invalid video metadata. fps={fps} frame_count={frame_count}")
         return 1
 
+    frame_timestamps: Optional[List[float]] = None
+    frames_timeline_path = infer_frames_timeline_path(events_json, video_path)
+    if frames_timeline_path is not None:
+        try:
+            frame_timestamps = load_frame_timestamps(frames_timeline_path, frame_count)
+            if frame_timestamps:
+                print(f"[info] Using frame timeline for precise alignment: {frames_timeline_path}")
+        except Exception as exc:
+            print(f"[WARN] Failed to load frame timeline: {exc}. Fallback to FPS mapping.")
+
     plan = build_frame_plan(
         events=events,
         fps=fps,
@@ -932,6 +1039,7 @@ def main() -> int:
         before_ms=args.window_before_ms,
         after_ms=args.window_after_ms,
         max_frames_per_event=max(1, args.max_frames_per_event),
+        frame_timestamps=frame_timestamps,
     )
     if not plan:
         print("[ERROR] No frame sampling plan generated.")
