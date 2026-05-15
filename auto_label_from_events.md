@@ -17,7 +17,7 @@
 程式先從命令列讀取：
 
 - `--video`：對應 MP4（必填）
-- `--events-json`：事件 JSON（可省略，預設自動推導與 `--video` 同場錄製的檔名）
+- `--events-json`：事件檔（NDJSON，一行一筆事件；可省略，預設自動推導與 `--video` 同場錄製的檔名）
 - `--output-dir`：輸出資料夾，可省略
 - `--label-policy`：類別策略，支援 `crop-search-direct`、`genai-marked-direct`、`serpapi-topk` 或 `fixed`（預設為 `genai-marked-direct`）
 - `--class-file`：候選類別檔，預設 `classes.txt`
@@ -46,7 +46,20 @@
 - `mouse_press`
 - `mouse_release`
 
-也會依 `--button` 過濾滑鼠按鍵，並把事件時間換算成相對於影片起點的秒數。
+也會依 `--button` 過濾滑鼠按鍵。事件中的 `timestamp` 需為「相對錄影起點秒數（float）」；程式會直接用此秒數對齊影片。
+
+若同場錄製存在 `frames_YYYYMMDD_HHMMSS.jsonl`（每幀時間軸 sidecar），程式會優先用它做「事件時間 → 最近幀」對齊；找不到或格式不符時才 fallback 到 `fps` 推算。
+
+事件檔格式為 NDJSON（每行一個 JSON 物件），例如：
+
+```json
+{"type":"mouse_press","button":"left","x":482,"y":250,"timestamp":2.064162}
+{"type":"mouse_release","button":"left","x":482,"y":250,"timestamp":2.158208}
+```
+
+錄影開始時還會包含 `sync_marker_start` / `sync_marker_end` 事件，供校準使用；`auto_label_from_events.py` 會自動忽略非滑鼠事件。
+
+> 注意：舊版「JSON 陣列 + ISO 時間字串」格式已不支援。
 
 ### 5. 建立抽幀計畫
 
