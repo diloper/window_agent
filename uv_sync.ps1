@@ -1,4 +1,4 @@
-$myProxy = [System.Environment]::GetEnvironmentVariable('MY_PROXY', 'Machine')
+$myProxy = [System.Environment]::GetEnvironmentVariable('MY_PROXY', 'User')
 
 if ([string]::IsNullOrWhiteSpace($myProxy)) {
 	Write-Error "MY_PROXY is missing. Stop setting HTTP_PROXY and HTTPS_PROXY."
@@ -8,7 +8,7 @@ if ([string]::IsNullOrWhiteSpace($myProxy)) {
 $env:HTTP_PROXY = $myProxy
 $env:HTTPS_PROXY = $myProxy
 
-$machineNoProxy = [System.Environment]::GetEnvironmentVariable('NO_PROXY', 'Machine')
+$machineNoProxy = [System.Environment]::GetEnvironmentVariable('NO_PROXY', 'User')
 if (-not [string]::IsNullOrWhiteSpace($machineNoProxy)) {
 	$env:NO_PROXY = $machineNoProxy
 }
