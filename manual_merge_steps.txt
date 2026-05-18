@@ -1,0 +1,6 @@
+git checkout main
+git pull
+git merge feature-branch
+git add .
+git commit
+git push
