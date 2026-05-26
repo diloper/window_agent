@@ -12,7 +12,7 @@ train/
 *.npz
 *.npy
 *.txt
-!requirements.txt
+requirements.txt
 # Image files
 *.png
 *.jpg
@@ -35,5 +35,5 @@ my_dataset/data.yaml
 recordings/
 *.pyc
 model/*.onnx
-
 X-AnyLabeling-v4.0.0-beta.2-CPU.exe
+
