@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,6 +24,9 @@ import genai as genai_helper
 _GOOGLE_SEARCH_RESULTS_MODULE: Optional[ModuleType] = None
 _GOOGLE_SEARCH_RESULTS_LOAD_ERROR: Optional[Exception] = None
 
+_ANALYZE_CLASSES_MODULE: Optional[ModuleType] = None
+_ANALYZE_CLASSES_LOAD_ERROR: Optional[Exception] = None
+
 
 try:
     _script_path = Path(__file__).with_name("google-search-results.py")
@@ -38,6 +42,21 @@ try:
     _GOOGLE_SEARCH_RESULTS_MODULE = _module
 except Exception as exc:
     _GOOGLE_SEARCH_RESULTS_LOAD_ERROR = exc
+
+try:
+    _analyze_path = Path(__file__).with_name("analyze_classes.py")
+    if not _analyze_path.exists():
+        raise FileNotFoundError(f"analyze_classes.py not found: {_analyze_path}")
+
+    _spec = importlib.util.spec_from_file_location("analyze_classes_module", _analyze_path)
+    if _spec is None or _spec.loader is None:
+        raise RuntimeError(f"Cannot load module spec from {_analyze_path}")
+
+    _module = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_module)
+    _ANALYZE_CLASSES_MODULE = _module
+except Exception as exc:
+    _ANALYZE_CLASSES_LOAD_ERROR = exc
 
 
 def search_images(api_key: str, query: str, num: int = 10) -> Dict[str, Any]:
@@ -309,6 +328,22 @@ def parse_args() -> argparse.Namespace:
         "--genai-model",
         default=genai_helper.DEFAULT_MODEL,
         help="Gemini model used by --label-policy genai-marked-direct",
+    )
+    parser.add_argument(
+        "--enable-class-mapping",
+        action="store_true",
+        help="Enable class name unification using mapping reference file",
+    )
+    parser.add_argument(
+        "--class-mapping-file",
+        default="class_mapping_reference.md",
+        help="Path to class name mapping reference file (default: class_mapping_reference.md)",
+    )
+    parser.add_argument(
+        "--auto-update-mapping",
+        action="store_true",
+        default=True,
+        help="Auto-update mapping reference file after labeling (default: True)",
     )
     return parser.parse_args()
 
@@ -702,11 +737,94 @@ def resize_image_to_fit(image: np.ndarray, max_width: int = 640, max_height: int
 
 
 def write_image_bgr(image_path: Path, image: np.ndarray) -> None:
-    suffix = image_path.suffix or ".jpg"
-    ok, encoded = cv2.imencode(suffix, image)
-    if not ok:
-        raise RuntimeError(f"Failed to encode image: {image_path}")
-    image_path.write_bytes(encoded.tobytes())
+    cv2.imwrite(str(image_path), image)
+
+
+def parse_class_mapping_reference(reference_file: Path) -> Dict[str, Dict]:
+    """Parse existing class name mappings from reference file.
+    
+    Returns dict with structure:
+    {
+        "Confirm button": {
+            "original_names": ["確定 button", "確定", ...],
+            "semantic_analysis": "確認操作的按鈕",
+            "variant_count": 5
+        },
+        ...
+    }
+    """
+    if not reference_file.exists():
+        return {}
+    
+    content = reference_file.read_text(encoding="utf-8")
+    lines = content.split('\n')
+    mappings = {}
+    
+    in_table = False
+    for line in lines:
+        stripped = line.strip()
+        
+        # Skip header and separator rows
+        if '|' in stripped and (':---' in stripped or '原始類別名稱' in stripped):
+            in_table = True
+            continue
+        
+        if in_table and '|' in stripped and not stripped.startswith('---'):
+            parts = [p.strip() for p in stripped.split('|')]
+            if len(parts) >= 5:  # | original | semantic | unified | count |
+                original_names_str = parts[1]
+                semantic_analysis = parts[2]
+                unified_name = parts[3]
+                try:
+                    variant_count = int(parts[4])
+                except (ValueError, IndexError):
+                    variant_count = 1
+                
+                if unified_name and unified_name != "建議統一名稱":
+                    mappings[unified_name] = {
+                        "original_names": [n.strip() for n in original_names_str.split(',')],
+                        "semantic_analysis": semantic_analysis,
+                        "variant_count": variant_count
+                    }
+    
+    return mappings
+
+
+def build_original_to_unified_mapping(mappings: Dict[str, Dict]) -> Dict[str, str]:
+    """Build reverse index: original_name -> unified_name for fast lookup."""
+    reverse_map = {}
+    for unified_name, data in mappings.items():
+        for original_name in data["original_names"]:
+            # Case-insensitive mapping
+            reverse_map[original_name.lower()] = unified_name
+    return reverse_map
+
+
+def apply_class_mapping(
+    label: str,
+    original_to_unified: Dict[str, str],
+    fallback: Optional[str] = None,
+) -> str:
+    """Apply class name mapping to unify label names.
+    
+    Args:
+        label: Original label name
+        original_to_unified: Mapping dict from original name to unified name
+        fallback: Fallback label if not found (default: return original label)
+    
+    Returns:
+        Unified label name or fallback/original if not found
+    """
+    if not label or not original_to_unified:
+        return label or (fallback or "")
+    
+    # Try exact case-insensitive match
+    unified = original_to_unified.get(label.lower())
+    if unified:
+        return unified
+    
+    # Return original or fallback
+    return fallback if fallback is not None else label
 
 
 def sanitize_label_name(raw_label: str, fallback_label: str) -> str:
@@ -1164,6 +1282,47 @@ def main() -> int:
                 sample.error = f"relabel failed: {exc}"
                 failures += 1
 
+    # Apply class name mapping if enabled
+    mapping_applied = False
+    if args.enable_class_mapping:
+        mapping_file = Path(args.class_mapping_file)
+        try:
+            print(f"[INFO] Loading class name mappings from: {mapping_file}")
+            mappings = parse_class_mapping_reference(mapping_file)
+            if mappings:
+                print(f"[INFO] Found {len(mappings)} unified class names in reference")
+                original_to_unified = build_original_to_unified_mapping(mappings)
+                print(f"[INFO] Built mapping index with {len(original_to_unified)} original name variants")
+                
+                # Apply mapping to all samples
+                mapped_count = 0
+                for sample in samples:
+                    original_label = sample.inferred_label
+                    if original_label:
+                        unified_label = apply_class_mapping(
+                            original_label,
+                            original_to_unified,
+                            fallback=None,
+                        )
+                        if unified_label != original_label:
+                            sample.inferred_label = unified_label
+                            mapped_count += 1
+                            print(f"[MAP] '{original_label}' -> '{unified_label}'")
+                            
+                            # Re-label the annotation file with unified name
+                            if sample.status == "ok":
+                                try:
+                                    relabel_annotation(sample.annotation_path, unified_label)
+                                except Exception as exc:
+                                    print(f"[WARN] Failed to re-label {sample.annotation_path}: {exc}")
+                
+                print(f"[INFO] Applied mapping to {mapped_count} samples")
+                mapping_applied = True
+            else:
+                print(f"[INFO] No mappings found in {mapping_file}, skipping mapping")
+        except Exception as exc:
+            print(f"[WARN] Failed to load class mapping: {exc}. Continuing without mapping.")
+
     class_order: List[str] = []
     if args.label_policy != "crop-search-direct":
         candidates = load_candidates(class_file)
@@ -1181,6 +1340,54 @@ def main() -> int:
 
     classes_out = output_dir / "classes_preview.txt"
     classes_out.write_text("\n".join(class_order), encoding="utf-8")
+
+    # Auto-update mapping reference file if enabled
+    if args.enable_class_mapping and args.auto_update_mapping:
+        mapping_file = Path(args.class_mapping_file)
+        if _ANALYZE_CLASSES_MODULE is None:
+            print(f"[WARN] analyze_classes.py not loaded: {_ANALYZE_CLASSES_LOAD_ERROR}. Skipping mapping update.")
+        else:
+            try:
+                print(f"[INFO] Auto-updating class mapping reference: {mapping_file}")
+                result = _ANALYZE_CLASSES_MODULE.analyze_class_names(
+                    classes_file=classes_out,
+                    reference_file=mapping_file,
+                )
+                
+                # Extract and merge mappings
+                table_content = _ANALYZE_CLASSES_MODULE.extract_table_from_result(result)
+                if table_content:
+                    new_mappings = _ANALYZE_CLASSES_MODULE.parse_table_to_mappings(table_content)
+                    existing_mappings = _ANALYZE_CLASSES_MODULE.parse_existing_mappings(mapping_file)
+                    merged_mappings = _ANALYZE_CLASSES_MODULE.merge_mappings(existing_mappings, new_mappings)
+                    
+                    # Save updated reference
+                    final_table = _ANALYZE_CLASSES_MODULE.format_mappings_as_table(merged_mappings)
+                    reference_content = f"""# Class Name Mapping Reference
+
+**Last Updated**: {time.strftime("%Y-%m-%d %H:%M:%S")}  
+**Source**: `{classes_out.relative_to(Path.cwd()) if classes_out.is_relative_to(Path.cwd()) else classes_out}`  
+**Model**: {_ANALYZE_CLASSES_MODULE.DEFAULT_MODEL}
+
+## Standardization Rules
+- **Language**: English names only
+- **Capitalization**: Sentence case
+- **Conflict Resolution**: Pick the most frequent variant
+- **Protection**: Existing unified names are preserved
+
+## Unified Class Name Mapping
+
+{final_table}
+
+---
+*This file is auto-generated and incrementally updated. Existing unified names are preserved.*
+"""
+                    mapping_file.write_text(reference_content, encoding="utf-8")
+                    print(f"[INFO] Updated mapping reference with {len(merged_mappings)} unified classes")
+                else:
+                    print(f"[WARN] No table found in analysis result. Skipping mapping update.")
+            except Exception as exc:
+                print(f"[WARN] Failed to update class mapping reference: {exc}")
 
     manifest_path = reports_dir / "manifest.csv"
     write_manifest(samples, manifest_path)

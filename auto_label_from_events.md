@@ -23,6 +23,9 @@
 - `--class-file`：候選類別檔，預設 `classes.txt`
 - `--serpapi-api-key`：SerpApi 金鑰，也可從環境變數或 `.env` 讀取
 - `--encoder` / `--decoder`：SAM/SAM2 ONNX 模型
+- `--enable-class-mapping`：啟用類別名稱統一（默認關閉）
+- `--class-mapping-file`：指定映射參考文件路徑（默認 `class_mapping_reference.md`）
+- `--auto-update-mapping`：自動更新映射參考文件（默認 True）
 
 ### 2. 載入環境變數
 
@@ -165,11 +168,71 @@
 
 ## 標註後處理
 
-### 1. 回寫 LabelMe 類別
+### 1. 類別名稱統一（可選）
+
+**自 2026-05-27 起新增功能**
+
+當使用 `--enable-class-mapping` 時，程式會在標註完成後自動統一類別名稱，避免語意相同但寫法不同的類別重複出現。
+
+#### 工作原理
+
+1. **加載映射參考**：從 `--class-mapping-file`（預設 `class_mapping_reference.md`）讀取已建立的類別映射表
+2. **應用映射**：將所有樣本的 `inferred_label` 統一為標準名稱
+3. **重新標註**：更新 LabelMe JSON 和 YOLO 標籤文件
+4. **自動更新參考**：調用 `analyze_classes.py` 分析新類別並增量更新映射表
+
+#### 映射規則
+
+- **語言**：優先使用英文名稱（避免中文或雙語混用）
+- **大小寫**：採用 sentence case（如 "Dropdown menu"）
+- **保護已有映射**：現有統一名稱不會被更改
+- **增量合併**：新變體自動歸類到對應的現有映射
+
+#### 輸出效果
+
+**未啟用映射時**：
+```
+classes_preview.txt:
+- 確定 button
+- OK button
+- 確定 (OK) button
+- Cancel
+- 取消
+```
+
+**啟用映射後**：
+```
+classes_preview.txt:
+- OK button
+- Cancel button
+```
+
+#### 日誌輸出範例
+
+```
+[INFO] Loading class name mappings from: class_mapping_reference.md
+[INFO] Found 20 unified class names in reference
+[INFO] Built mapping index with 65 original name variants
+[MAP] '確定 button' -> 'OK button'
+[MAP] 'OK button' -> 'OK button'
+[MAP] '確定 (OK) button' -> 'OK button'
+[MAP] '取消' -> 'Cancel button'
+[INFO] Applied mapping to 15 samples
+[INFO] Auto-updating class mapping reference: class_mapping_reference.md
+[INFO] Updated mapping reference with 22 unified classes
+```
+
+#### 相關文件
+
+- `class_mapping_reference.md`：映射參考文件，增量更新
+- `analyze_classes.py`：類別分析工具，自動調用
+- `analyze_classes.md`：詳細說明映射機制
+
+### 2. 回寫 LabelMe 類別
 
 `relabel_annotation()` 會把 LabelMe JSON 內每個 shape 的 `label` 改成推論出的事件類別。
 
-### 2. 匯出 YOLO
+### 3. 匯出 YOLO
 
 `export_yolo()` 會：
 
@@ -179,7 +242,7 @@
 - 正規化成 YOLO `cx cy w h`
 - 寫入 `labels/*.txt`
 
-### 3. 輸出報表
+### 4. 輸出報表
 
 程式最後會輸出：
 
@@ -250,11 +313,23 @@
 
 若 LabelMe JSON 沒有 shape、第一個 shape 無法轉成有效 bbox，或裁切區域為空，樣本會退回 fallback label。
 
+### 8. 映射參考文件無效
+
+若啟用 `--enable-class-mapping` 但 `--class-mapping-file` 不存在或格式錯誤，程式會記錄警告並繼續使用原始類別名稱。
+
 ## 範例指令
 
+### 基本用法（預設 genai-marked-direct）
 
 ```bat
-R:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
+python auto_label_from_events.py ^
+  --video recordings\screen_20260501_165101.mp4
+```
+
+### 使用 crop-search-direct 策略
+
+```bat
+python auto_label_from_events.py ^
   --video recordings\screen_20260501_165101.mp4 ^
   --label-policy crop-search-direct
 ```
@@ -262,49 +337,75 @@ R:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
 如未指定 `--events-json`，程式會自動推導 `recordings/events_YYYYMMDD_HHMMSS.json`（與 `--video` 檔名時間戳一致）。
 若有特殊需求仍可手動指定 `--events-json`。
 
-若要改用 Gemini 分析整張 marked image，可執行：
+### 使用 Gemini 分析 marked image
 
 ```bat
-python.exe auto_label_from_events.py ^
+python auto_label_from_events.py ^
   --video recordings\screen_20260501_165101.mp4 ^
   --label-policy genai-marked-direct
 ```
 
 此模式需先提供 `GOOGLE_API_KEY` 或 `GEMINI_API_KEY`。
 
+### 啟用類別名稱統一
+
+```bat
+python auto_label_from_events.py ^
+  --video recordings\screen_20260501_165101.mp4 ^
+  --label-policy genai-marked-direct ^
+  --enable-class-mapping
+```
+
+此模式會：
+- 在標註完成後統一類別名稱
+- 自動更新 `class_mapping_reference.md`
+- 移除重複的類別變體
+
+### 自定義映射文件路徑
+
+```bat
+python auto_label_from_events.py ^
+  --video recordings\screen_20260501_165101.mp4 ^
+  --enable-class-mapping ^
+  --class-mapping-file custom_mapping.md
+```
+
+### 禁用自動更新映射參考
+
+```bat
+python auto_label_from_events.py ^
+  --video recordings\screen_20260501_165101.mp4 ^
+  --enable-class-mapping ^
+  --no-auto-update-mapping
+```
+
+### 完整參數範例
+
+```bat
+python auto_label_from_events.py ^
+  --video recordings\screen_20260501_165101.mp4 ^
+  --events-json recordings\events_20260501_165101.json ^
+  --output-dir my_output ^
+  --label-policy genai-marked-direct ^
+  --enable-class-mapping ^
+  --class-mapping-file class_mapping_reference.md ^
+  --encoder model\sam2_hiera_tiny_encoder.onnx ^
+  --decoder model\sam2_hiera_tiny_decoder.onnx ^
+  --output-mode rectangle
+```
+
 ## 目前適用版本說明
 
 依目前專案狀態，這支程式的關鍵依賴關係如下：
 
 - 使用 `google-search-results.py` 提供 Google Lens 圖片分析與可重用 helper
 - 使用 `tools/autolabel.py` 執行 ONNX 自動標註
+- 使用 `analyze_classes.py` 進行類別名稱統一分析（當 `--enable-class-mapping` 啟用時）
 - 若要用 PaddleOCR 相關流程，則是由 `google-search-results.py` 間接使用 `easyocr_checker.py`
 
-## 範例指令
+## 相關文件
 
-
-```bat
-python.exe auto_label_from_events.py `
-  --video recordings\screen_20260501_165101.mp4 `
-  --label-policy crop-search-direct
-```
-
-如未指定 `--events-json`，會自動推導與 `--video` 同場錄製的 events 檔案。
-
-若要改用 Gemini 分析整張 marked image：
-
-```bat
-python.exe auto_label_from_events.py `
-  --video recordings\screen_20260501_165101.mp4 `
-  --label-policy genai-marked-direct
-```
-
-此模式需先提供 `GOOGLE_API_KEY` 或 `GEMINI_API_KEY`。
-
-## 目前適用版本說明
-
-依目前專案狀態，這支程式的關鍵依賴關係如下：
-
-- 使用 `google-search-results.py` 提供 Google Lens 圖片分析與可重用 helper
-- 使用 `tools/autolabel.py` 執行 ONNX 自動標註
-- 若要用 PaddleOCR 相關流程，則是由 `google-search-results.py` 間接使用 `easyocr_checker.py`
+- `README.md`：專案整體說明
+- `analyze_classes.md`：類別名稱分析工具說明
+- `class_mapping_reference.md`：類別映射參考文件
+- `screen_event_recorder.py`：錄製事件與螢幕的工具
