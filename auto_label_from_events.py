@@ -335,6 +335,11 @@ def parse_args() -> argparse.Namespace:
         help="Enable class name unification using mapping reference file",
     )
     parser.add_argument(
+        "--disable-class-mapping",
+        action="store_true",
+        help="Disable auto class name unification even if mapping reference file exists",
+    )
+    parser.add_argument(
         "--class-mapping-file",
         default="class_mapping_reference.md",
         help="Path to class name mapping reference file (default: class_mapping_reference.md)",
@@ -1060,6 +1065,16 @@ def write_manifest(samples: Sequence[FrameSample], path: Path) -> None:
 
 def main() -> int:
     args = parse_args()
+
+    # Auto-enable class mapping if reference file exists (unless explicitly disabled)
+    mapping_file = Path(args.class_mapping_file)
+    if not args.enable_class_mapping and not args.disable_class_mapping and mapping_file.exists():
+        print(f"[INFO] Auto-enabling class mapping (found {mapping_file})")
+        args.enable_class_mapping = True
+    elif args.disable_class_mapping:
+        args.enable_class_mapping = False
+        if mapping_file.exists():
+            print(f"[INFO] Class mapping disabled by --disable-class-mapping flag")
 
     load_dotenv_file(Path(args.dotenv_path))
 

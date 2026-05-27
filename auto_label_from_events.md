@@ -23,7 +23,8 @@
 - `--class-file`：候選類別檔，預設 `classes.txt`
 - `--serpapi-api-key`：SerpApi 金鑰，也可從環境變數或 `.env` 讀取
 - `--encoder` / `--decoder`：SAM/SAM2 ONNX 模型
-- `--enable-class-mapping`：啟用類別名稱統一（默認關閉）
+- `--enable-class-mapping`：明確啟用類別名稱統一（當 `class_mapping_reference.md` 存在時會自動啟用）
+- `--disable-class-mapping`：明確禁用類別名稱統一（即使映射文件存在）
 - `--class-mapping-file`：指定映射參考文件路徑（默認 `class_mapping_reference.md`）
 - `--auto-update-mapping`：自動更新映射參考文件（默認 True）
 
@@ -168,11 +169,19 @@
 
 ## 標註後處理
 
-### 1. 類別名稱統一（可選）
+### 1. 類別名稱統一（自動啟用）
 
 **自 2026-05-27 起新增功能**
 
-當使用 `--enable-class-mapping` 時，程式會在標註完成後自動統一類別名稱，避免語意相同但寫法不同的類別重複出現。
+**重要提示**：當工作區存在 `class_mapping_reference.md` 時，程式會**自動啟用**類別名稱統一功能。如需明確禁用，可使用 `--disable-class-mapping` 參數。
+
+程式會在標註完成後自動統一類別名稱，避免語意相同但寫法不同的類別重複出現。
+
+#### 啟用方式
+
+1. **自動啟用**（推薦）：確保工作區根目錄存在 `class_mapping_reference.md`，程式會自動偵測並啟用
+2. **明確啟用**：使用 `--enable-class-mapping` 參數
+3. **明確禁用**：使用 `--disable-class-mapping` 參數（優先級最高）
 
 #### 工作原理
 
@@ -319,12 +328,14 @@ classes_preview.txt:
 
 ## 範例指令
 
-### 基本用法（預設 genai-marked-direct）
+### 基本用法（自動啟用類別統一）
 
 ```bat
 python auto_label_from_events.py ^
   --video recordings\screen_20260501_165101.mp4
 ```
+
+**注意**：如果工作區存在 `class_mapping_reference.md`，類別名稱統一功能會自動啟用。
 
 ### 使用 crop-search-direct 策略
 
@@ -347,7 +358,7 @@ python auto_label_from_events.py ^
 
 此模式需先提供 `GOOGLE_API_KEY` 或 `GEMINI_API_KEY`。
 
-### 啟用類別名稱統一
+### 明確啟用類別名稱統一
 
 ```bat
 python auto_label_from_events.py ^
@@ -361,14 +372,27 @@ python auto_label_from_events.py ^
 - 自動更新 `class_mapping_reference.md`
 - 移除重複的類別變體
 
+**註**：當映射文件存在時，此參數可省略（會自動啟用）。
+
+### 禁用類別名稱統一
+
+```bat
+python auto_label_from_events.py ^
+  --video recordings\screen_20260501_165101.mp4 ^
+  --disable-class-mapping
+```
+
+使用此參數可明確禁用類別統一功能，即使 `class_mapping_reference.md` 存在。
+
 ### 自定義映射文件路徑
 
 ```bat
 python auto_label_from_events.py ^
   --video recordings\screen_20260501_165101.mp4 ^
-  --enable-class-mapping ^
   --class-mapping-file custom_mapping.md
 ```
+
+**註**：如果指定的映射文件存在，會自動啟用類別統一功能。
 
 ### 禁用自動更新映射參考
 
@@ -387,12 +411,13 @@ python auto_label_from_events.py ^
   --events-json recordings\events_20260501_165101.json ^
   --output-dir my_output ^
   --label-policy genai-marked-direct ^
-  --enable-class-mapping ^
   --class-mapping-file class_mapping_reference.md ^
   --encoder model\sam2_hiera_tiny_encoder.onnx ^
   --decoder model\sam2_hiera_tiny_decoder.onnx ^
   --output-mode rectangle
 ```
+
+**註**：因為指定了 `--class-mapping-file` 且該文件存在，類別統一功能會自動啟用，無需明確指定 `--enable-class-mapping`。
 
 ## 目前適用版本說明
 
