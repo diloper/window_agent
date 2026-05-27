@@ -27,9 +27,9 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 
 ## Build And Test
 - For generic requests like "功能測試" without a specified target, default to validating `screen_event_recorder.py` first.
-- For `screen_event_recorder.py` validation, prefer `C:\Users\User\miniconda3\python.exe -m py_compile screen_event_recorder.py` as the baseline check.
+- For `screen_event_recorder.py` validation, prefer `python -m py_compile screen_event_recorder.py` as the baseline check.
 - Prefer the existing `prepare-colab-dataset` task for validating dataset preparation behavior.
-- If a task is not suitable, use `C:\Users\User\miniconda3\python.exe auto_prepare_dataset.py` from the workspace root.
+- If a task is not suitable, use `python auto_prepare_dataset.py` from the workspace root.
 - After Python changes, report what was verified and what was not run.
 
 ## Output Expectations
@@ -43,6 +43,6 @@ When a user asks you to perform a task that falls within the domain of a skill, 
 <skill>
 <name>auto-label-video</name>
 <description>Use when user triggers auto-labeling workflow with patterns like "自動標註 XXX.mp4" or "autolabel XXX.mp4". Standardizes video frame extraction and SerpAPI-based class inference with minimal parameter entry.</description>
-<file>r:\SAM\.github\skills\auto-label-video\SKILL.md</file>
+<file>.github\skills\auto-label-video\SKILL.md</file>
 </skill>
 </skills>
