@@ -9,13 +9,29 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - Keep edits minimal and consistent with the current script-oriented style. Avoid unrelated refactors.
 - When modifying Python files, avoid duplicate import statements; reuse existing imports and keep each module imported only once.
 - State assumptions briefly only when they materially affect the result.
-- For any code change, create and work on a temporary branch first.
-- Never merge into `main` automatically; merge only after explicit human approval.
-- After a user-approved merge into `main` succeeds, automatically delete only the just-merged temporary local branch for that task.
-- Before deleting a branch, verify all of the following: current branch is `main`, target branch is not `main`, and target branch appears in `git branch --merged main`.
-- Delete with `git branch -d <branch>` and do not use force delete (`-D`) unless the user explicitly approves it.
-- After deletion, verify cleanup with `git branch --list <branch>` and ensure no remote branch deletion is performed by default.
-- When executing Git commands, use Git Bash.
+
+### 分支管理規範（Branching Policy）
+- **所有程式碼修改前，必須先建立並切換到新分支，不可直接在 main 分支作業。**
+		- 建議分支命名：`feature/日期-描述`（如：feature/20260528-fix-bug）
+		- 建立分支指令：
+			```bash
+			git checkout main
+			git pull
+			git checkout -b feature/20260528-描述
+			```
+- 完成修改後，需經人工審查（PR/Code Review）才可合併回 main。
+- 合併後，僅刪除本地剛合併的臨時分支（不可刪除 main，也不可預設刪除遠端分支）。
+- 刪除分支前，請確認：
+		1. 當前分支為 main
+		2. 目標分支不是 main
+		3. 目標分支已出現在 `git branch --merged main` 結果中
+- 刪除指令：
+	```bash
+	git branch -d <branch>
+	```
+- 僅在使用者明確同意下，才可強制刪除（`-D`）。
+- 執行 Git 指令時，請使用 Git Bash。
+
 - After code changes, automatically run the relevant test or validation command.
 - If test or runtime errors are caused by the change, fix them and re-run verification before handoff.
 - During functional testing, if errors are detected, automatically attempt fixes and re-run the same test until it passes or a clear blocker is identified.
