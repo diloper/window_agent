@@ -47,6 +47,18 @@ class ScreenEventRecorder:
             'shift': False,
             'alt': False
         }
+        
+        # 长按检测状态
+        self._longpress_timer = None
+        self._longpress_key = None
+        self._longpress_threshold = 0.3  # 300ms
+        
+        # 特殊模式状态
+        self._special_mode_active = False
+        self._caps_lock_pressed = False  # 跟踪 Caps Lock 按下状态，避免重复触发
+        
+        # 覆盖层窗口
+        self._indicator_window = None
 
     def _apply_sync_marker(self, frame, rel_ts, sync_marker_seconds):
         """在影格左上角繪製視覺同步標記（紅色實心矩形）。
@@ -174,7 +186,7 @@ class ScreenEventRecorder:
         frame_interval = 1.0 / max(1, fps)
         target_frame_count = int(fps * duration_seconds) if duration_seconds else None
 
-        with mss.mss() as sct:
+        with mss.MSS() as sct:
             while self.recording:
                 if target_frame_count is not None and self._frame_capture_count >= target_frame_count:
                     break
@@ -269,6 +281,96 @@ class ScreenEventRecorder:
                 return f"Ctrl+{raw_key.upper()}"
         return raw_key
 
+    def _on_longpress_detected(self):
+        """长按检测触发回调，激活特殊模式"""
+        if not self.recording or self._special_mode_active:
+            return
+        
+        self._special_mode_active = True
+        print("特殊模式已激活！")
+        
+        # 写入进入特殊模式的事件
+        event = {
+            'type': 'special_mode_enter',
+            'key': self._longpress_key,
+            'timestamp': self._relative_timestamp()
+        }
+        self._write_event(event)
+        
+        # 显示透明覆盖层
+        self._show_indicator_overlay()
+
+    def _exit_special_mode(self):
+        """退出特殊模式"""
+        if not self._special_mode_active:
+            return
+        
+        self._special_mode_active = False
+        print("特殊模式已退出")
+        
+        # 写入退出特殊模式的事件
+        event = {
+            'type': 'special_mode_exit',
+            'key': self._longpress_key,
+            'timestamp': self._relative_timestamp()
+        }
+        self._write_event(event)
+        
+        # 隐藏透明覆盖层
+        self._hide_indicator_overlay()
+        
+        # 清理长按状态
+        self._longpress_key = None
+
+    def _show_indicator_overlay(self):
+        """显示全屏透明覆盖层窗口，阻止鼠标事件穿透"""
+        import tkinter as tk
+        import threading
+        
+        if self._indicator_window is not None:
+            return  # 已显示
+        
+        def create_window():
+            # 创建顶层窗口
+            window = tk.Tk()
+            window.overrideredirect(True)  # 无边框
+            window.attributes('-topmost', True)  # 始终置顶
+            window.attributes('-alpha', 0.01)  # 几乎完全透明，但仍捕获鼠标事件阻止穿透
+            
+            # 全屏尺寸
+            screen_width = window.winfo_screenwidth()
+            screen_height = window.winfo_screenheight()
+            window.geometry(f'{screen_width}x{screen_height}+0+0')
+            
+            # 创建全屏画布（白色背景，但由于 alpha=0.01 几乎看不见）
+            canvas = tk.Canvas(window, width=screen_width, height=screen_height, 
+                             bg='white', highlightthickness=0)
+            canvas.pack()
+            
+            # 保存窗口引用
+            self._indicator_window = window
+            
+            # 运行主循环
+            window.mainloop()
+        
+        # 在后台线程运行
+        overlay_thread = threading.Thread(target=create_window, daemon=True)
+        overlay_thread.start()
+        
+        # 给窗口一点时间初始化
+        time.sleep(0.1)
+
+    def _hide_indicator_overlay(self):
+        """隐藏透明覆盖层窗口"""
+        if self._indicator_window:
+            try:
+                self._indicator_window.quit()
+                self._indicator_window.destroy()
+            except:
+                pass  # 窗口可能已经被销毁
+            finally:
+                self._indicator_window = None
+
     def record_screen(self, fps=15, duration_seconds=None, sync_marker_ms=300):
         """以 producer-consumer 方式錄製螢幕到 MP4。
 
@@ -283,7 +385,7 @@ class ScreenEventRecorder:
         # 將毫秒轉換為秒，供後續按時間比較使用（rel_ts 單位為秒）
         # max(0.0, ...) 確保負值輸入不會造成邏輯異常
         sync_marker_seconds = max(0.0, sync_marker_ms / 1000.0)
-        with mss.mss() as sct:
+        with mss.MSS() as sct:
             monitor = sct.monitors[1]  # 主螢幕
         frame_size = (monitor['width'], monitor['height'])
         output_file = self.output_dir / f"screen_{self.timestamp}.mp4"
@@ -310,6 +412,16 @@ class ScreenEventRecorder:
         raw_key = self._extract_raw_key(key)
         normalized_key = self._normalize_key(raw_key)
 
+        # 检测 Caps Lock 键切换特殊模式
+        if key == keyboard.Key.caps_lock and not self._caps_lock_pressed:
+            self._caps_lock_pressed = True
+            # 切换特殊模式
+            if self._special_mode_active:
+                self._exit_special_mode()
+            else:
+                self._longpress_key = 'caps_lock'  # 保存键名用于事件记录
+                self._on_longpress_detected()
+
         event = {
             'type': 'key_press',
             'key': normalized_key,
@@ -322,6 +434,11 @@ class ScreenEventRecorder:
         """記錄鍵盤釋放"""
         raw_key = self._extract_raw_key(key)
         normalized_key = self._normalize_key(raw_key)
+        
+        # 重置 Caps Lock 按下状态
+        if key == keyboard.Key.caps_lock:
+            self._caps_lock_pressed = False
+        
         event = {
             'type': 'key_release',
             'key': normalized_key,
@@ -483,6 +600,15 @@ class ScreenEventRecorder:
     def stop_recording(self):
         """停止錄製"""
         self.recording = False
+        
+        # 清理长按 Timer
+        if self._longpress_timer is not None:
+            self._longpress_timer.cancel()
+            self._longpress_timer = None
+        
+        # 如果特殊模式仍在激活状态，退出它
+        if self._special_mode_active:
+            self._exit_special_mode()
 
 
 if __name__ == "__main__":
