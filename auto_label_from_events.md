@@ -91,30 +91,31 @@
 
 `event_0001_mouse_press_f000112_x636_y700.jpg`
 
-### 7. 執行自動標註
+### 7. 依 special_mode 分流標註
 
-`run_autolabel_for_sample()` 會呼叫：
+程式會先解析 `events_*.json` 的：
 
-- `tools/autolabel.py`
+- `special_mode_enter`
+- `special_mode_exit`
 
-並傳入：
+建立 special_mode 時間區間，之後每個 sample 依事件 timestamp 分流：
 
-- 圖片路徑
-- encoder / decoder ONNX
-- 滑鼠座標點
-- 輸出模式
-- 輸出 JSON 路徑
+1. 在 special_mode 區間內：
 
-如果成功：
+- 跳過 `tools/autolabel.py` 推理
+- 直接用同一組 `mouse_press + mouse_release` 座標產生 rectangle 標註
+- 同步產生整張標記圖 `<annotation_stem>_marked.jpg`（紅色實線框）
 
-- `sample.status = "ok"`
-- 同步產生整張標記圖 `<annotation_stem>_marked.jpg`（所有辨識框紅色實線）
-- 將標記圖移到 `marked/`，與 `images/` 原圖分開存放
+2. 離開 special_mode 區間後：
 
-如果失敗：
+- 恢復原本 `run_autolabel_for_sample()` 流程
+- 呼叫 `tools/autolabel.py` 產生標註與 marked 圖
 
-- `sample.status = "failed"`
-- `sample.error` 會記錄錯誤訊息
+共同結果（兩種路徑都一致）：
+
+- 成功時 `sample.status = "ok"`
+- 失敗時 `sample.status = "failed"`，並將原因寫入 `sample.error`
+- 標記圖會輸出到 `marked/`，與 `images/` 原圖分開存放
 
 ## 類別命名流程
 
@@ -122,7 +123,7 @@
 
 這是目前新增的主要命名流程。
 
-當 `run_autolabel_for_sample()` 成功產生 LabelMe JSON 後，程式會：
+當 sample 成功產生 LabelMe JSON（不論來源是 autolabel 或 special_mode 直出）後，程式會：
 
 - 讀取第一個 shape 的 points
 - 轉成外接框 bbox
@@ -140,7 +141,7 @@
 
 這是新的 marked image 命名流程。
 
-當 `run_autolabel_for_sample()` 成功產生 `marked/<annotation_stem>_marked.jpg` 後，程式會：
+當 sample 成功產生 `marked/<annotation_stem>_marked.jpg`（不論來源是 autolabel 或 special_mode 直出）後，程式會：
 
 - 直接讀取整張 marked image
 - 呼叫 `genai.py` 內的 Gemini 多模態分析函式

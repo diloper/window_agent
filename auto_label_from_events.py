@@ -648,6 +648,170 @@ def run_autolabel_for_sample(
     return True, ""
 
 
+def load_special_mode_intervals(events_json: Path) -> List[Tuple[float, float]]:
+    intervals: List[Tuple[float, float]] = []
+    enter_ts: Optional[float] = None
+    last_ts: float = 0.0
+
+    with events_json.open("r", encoding="utf-8") as fp:
+        for line in fp:
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(item, dict):
+                continue
+
+            if "timestamp" in item:
+                try:
+                    last_ts = max(last_ts, parse_event_timestamp(item["timestamp"]))
+                except ValueError:
+                    pass
+
+            t = str(item.get("type", ""))
+            if t == "special_mode_enter" and "timestamp" in item:
+                try:
+                    enter_ts = parse_event_timestamp(item["timestamp"])
+                except ValueError:
+                    continue
+            elif t == "special_mode_exit" and enter_ts is not None and "timestamp" in item:
+                try:
+                    exit_ts = parse_event_timestamp(item["timestamp"])
+                except ValueError:
+                    continue
+                start = min(enter_ts, exit_ts)
+                end = max(enter_ts, exit_ts)
+                intervals.append((start, end))
+                enter_ts = None
+
+    if enter_ts is not None:
+        intervals.append((enter_ts, max(enter_ts, last_ts)))
+
+    return intervals
+
+
+def is_in_special_mode(timestamp: float, intervals: Sequence[Tuple[float, float]]) -> bool:
+    for start, end in intervals:
+        if start <= timestamp <= end:
+            return True
+    return False
+
+
+def build_press_release_pairs(events: Sequence[MouseEvent]) -> List[Tuple[MouseEvent, MouseEvent]]:
+    pairs: List[Tuple[MouseEvent, MouseEvent]] = []
+    pending_press: Optional[MouseEvent] = None
+
+    for event in events:
+        if event.event_type == "mouse_press":
+            pending_press = event
+            continue
+        if event.event_type == "mouse_release" and pending_press is not None:
+            pairs.append((pending_press, event))
+            pending_press = None
+
+    return pairs
+
+
+def save_marked_full_image_local(image_rgb: np.ndarray, shapes: Sequence[Dict[str, Any]], output_path: Path) -> None:
+    image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    image_h, image_w = image_bgr.shape[:2]
+
+    for shape in shapes:
+        points = shape.get("points") or []
+        if not points:
+            continue
+
+        xs = [int(round(p[0])) for p in points if len(p) >= 2]
+        ys = [int(round(p[1])) for p in points if len(p) >= 2]
+        if not xs or not ys:
+            continue
+
+        x1 = max(0, min(xs))
+        y1 = max(0, min(ys))
+        x2 = min(image_w - 1, max(xs))
+        y2 = min(image_h - 1, max(ys))
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        cv2.rectangle(
+            image_bgr,
+            (x1, y1),
+            (x2, y2),
+            color=(0, 0, 255),
+            thickness=2,
+            lineType=cv2.LINE_8,
+        )
+
+    cv2.imwrite(str(output_path), image_bgr)
+
+
+def write_special_mode_sample(
+    sample: FrameSample,
+    press_event: MouseEvent,
+    release_event: MouseEvent,
+    marked_dir: Path,
+) -> Tuple[bool, str]:
+    try:
+        image_bgr = load_image_bgr(sample.image_path)
+    except Exception as exc:
+        return False, f"cannot read sample image: {exc}"
+
+    image_h, image_w = image_bgr.shape[:2]
+    x1 = max(0, min(image_w - 1, int(press_event.x)))
+    y1 = max(0, min(image_h - 1, int(press_event.y)))
+    x2 = max(0, min(image_w - 1, int(release_event.x)))
+    y2 = max(0, min(image_h - 1, int(release_event.y)))
+
+    if x1 == x2:
+        x2 = min(image_w - 1, x1 + 1)
+    if y1 == y2:
+        y2 = min(image_h - 1, y1 + 1)
+
+    x_min, x_max = sorted((x1, x2))
+    y_min, y_max = sorted((y1, y2))
+    if x_max <= x_min or y_max <= y_min:
+        return False, "invalid rectangle from mouse press/release"
+
+    shape = {
+        "label": "object",
+        "score": None,
+        "points": [
+            [int(x_min), int(y_min)],
+            [int(x_max), int(y_min)],
+            [int(x_max), int(y_max)],
+            [int(x_min), int(y_max)],
+        ],
+        "group_id": None,
+        "description": "",
+        "difficult": False,
+        "shape_type": "rectangle",
+        "flags": {},
+        "attributes": {},
+    }
+
+    payload = {
+        "version": "5.0.0",
+        "flags": {},
+        "shapes": [shape],
+        "imagePath": sample.image_path.name,
+        "imageData": None,
+        "imageHeight": int(image_h),
+        "imageWidth": int(image_w),
+    }
+
+    with sample.annotation_path.open("w", encoding="utf-8") as fp:
+        json.dump(payload, fp, indent=2, ensure_ascii=False)
+
+    marked_path = marked_dir / f"{sample.annotation_path.stem}_marked.jpg"
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    save_marked_full_image_local(image_rgb, [shape], marked_path)
+    sample.marked_path = marked_path
+    return True, ""
+
+
 def move_marked_preview(sample: FrameSample, marked_dir: Path) -> None:
     marked_src = sample.annotation_path.with_name(f"{sample.annotation_path.stem}_marked.jpg")
     if not marked_src.exists():
@@ -1183,6 +1347,13 @@ def main() -> int:
         print("[ERROR] No frames extracted from the video.")
         return 1
 
+    special_mode_intervals = load_special_mode_intervals(events_json)
+    press_release_pairs = build_press_release_pairs(events)
+    pair_by_event_id: Dict[int, Tuple[MouseEvent, MouseEvent]] = {}
+    for press_event, release_event in press_release_pairs:
+        pair_by_event_id[press_event.event_id] = (press_event, release_event)
+        pair_by_event_id[release_event.event_id] = (press_event, release_event)
+
     failures = 0
     if args.skip_autolabel:
         for sample in samples:
@@ -1197,10 +1368,28 @@ def main() -> int:
             return 1
 
         for sample in samples:
-            ok, err = run_autolabel_for_sample(sample, args, sys.executable)
+            sample_ts = parse_event_timestamp(sample.timestamp_iso)
+            if is_in_special_mode(sample_ts, special_mode_intervals):
+                pair = pair_by_event_id.get(sample.event_id)
+                if pair is None:
+                    sample.status = "failed"
+                    sample.error = "special_mode sample has no mouse press/release pair"
+                    failures += 1
+                    continue
+
+                ok, err = write_special_mode_sample(
+                    sample,
+                    press_event=pair[0],
+                    release_event=pair[1],
+                    marked_dir=marked_dir,
+                )
+            else:
+                ok, err = run_autolabel_for_sample(sample, args, sys.executable)
+
             if ok:
                 sample.status = "ok"
-                move_marked_preview(sample, marked_dir)
+                if not is_in_special_mode(sample_ts, special_mode_intervals):
+                    move_marked_preview(sample, marked_dir)
             else:
                 sample.status = "failed"
                 sample.error = err

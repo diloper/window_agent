@@ -48,14 +48,11 @@ class ScreenEventRecorder:
             'alt': False
         }
         
-        # 长按检测状态
-        self._longpress_timer = None
-        self._longpress_key = None
-        self._longpress_threshold = 0.3  # 300ms
-        
-        # 特殊模式状态
+        # 特殊模式狀態
         self._special_mode_active = False
-        self._caps_lock_pressed = False  # 跟踪 Caps Lock 按下状态，避免重复触发
+        self._caps_lock_pressed = False  # 跟踪 Caps Lock 按下狀態，避免重複觸發
+        self._special_mode_key = None  # 記錄觸發特殊模式的鍵
+        self._special_mode_timer = None  # 若未來需延伸為自動關閉可用
         
         # 覆盖层窗口
         self._indicator_window = None
@@ -281,46 +278,39 @@ class ScreenEventRecorder:
                 return f"Ctrl+{raw_key.upper()}"
         return raw_key
 
-    def _on_longpress_detected(self):
-        """长按检测触发回调，激活特殊模式"""
+    def _activate_special_mode(self):
+        """啟動特殊模式（由 Caps Lock 觸發）"""
         if not self.recording or self._special_mode_active:
             return
-        
         self._special_mode_active = True
-        print("特殊模式已激活！")
-        
-        # 写入进入特殊模式的事件
+        print("特殊模式已啟動！")
+        # 寫入進入特殊模式的事件
         event = {
             'type': 'special_mode_enter',
-            'key': self._longpress_key,
+            'key': self._special_mode_key,
             'timestamp': self._relative_timestamp()
         }
         self._write_event(event)
-        
-        # 显示透明覆盖层
+        # 顯示透明覆蓋層
         self._show_indicator_overlay()
 
     def _exit_special_mode(self):
-        """退出特殊模式"""
+        """關閉特殊模式"""
         if not self._special_mode_active:
             return
-        
         self._special_mode_active = False
-        print("特殊模式已退出")
-        
-        # 写入退出特殊模式的事件
+        print("特殊模式已關閉")
+        # 寫入離開特殊模式的事件
         event = {
             'type': 'special_mode_exit',
-            'key': self._longpress_key,
+            'key': self._special_mode_key,
             'timestamp': self._relative_timestamp()
         }
         self._write_event(event)
-        
-        # 隐藏透明覆盖层
+        # 隱藏透明覆蓋層
         self._hide_indicator_overlay()
-        
-        # 清理长按状态
-        self._longpress_key = None
+        # 清理特殊模式鍵狀態
+        self._special_mode_key = None
 
     def _show_indicator_overlay(self):
         """显示全屏透明覆盖层窗口，阻止鼠标事件穿透"""
@@ -412,15 +402,15 @@ class ScreenEventRecorder:
         raw_key = self._extract_raw_key(key)
         normalized_key = self._normalize_key(raw_key)
 
-        # 检测 Caps Lock 键切换特殊模式
+        # 檢測 Caps Lock 鍵切換特殊模式
         if key == keyboard.Key.caps_lock and not self._caps_lock_pressed:
             self._caps_lock_pressed = True
-            # 切换特殊模式
+            # 切換特殊模式
             if self._special_mode_active:
                 self._exit_special_mode()
             else:
-                self._longpress_key = 'caps_lock'  # 保存键名用于事件记录
-                self._on_longpress_detected()
+                self._special_mode_key = 'caps_lock'  # 保存鍵名用於事件記錄
+                self._activate_special_mode()
 
         event = {
             'type': 'key_press',
@@ -601,10 +591,10 @@ class ScreenEventRecorder:
         """停止錄製"""
         self.recording = False
         
-        # 清理长按 Timer
-        if self._longpress_timer is not None:
-            self._longpress_timer.cancel()
-            self._longpress_timer = None
+        # 清理特殊模式 Timer
+        if self._special_mode_timer is not None:
+            self._special_mode_timer.cancel()
+            self._special_mode_timer = None
         
         # 如果特殊模式仍在激活状态，退出它
         if self._special_mode_active:
