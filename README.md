@@ -65,6 +65,39 @@ Output:
 - 腳本是「複製」檔案，不會移動原始資料。
 - 若圖片沒有對應標註，該圖片仍會被複製，但不會有 label。
 
+## Repository Policy Guardrails / 倉庫規範防線
+
+This repository includes a policy checker used by Git hooks to enforce branch and baseline validation rules.
+
+本專案提供一個規範檢查器，搭配 Git hooks 強制分支與基礎驗證規則。
+
+### Install Hooks / 安裝 Hooks
+
+From workspace root:
+
+在專案根目錄執行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/install-hooks.ps1
+```
+
+### What Is Enforced / 強制規則
+
+- `pre-commit`: blocks commits on `main`/`master`; branch must start with `feature/`, `hotfix/`, or `bugfix/`.
+- `pre-push`: runs the same branch policy and baseline compile check on `screen_event_recorder.py`.
+- CI (`.github/workflows/policy-check.yml`): validates PR branch naming and runs `scripts/policy_check.py`.
+
+- `pre-commit`：禁止在 `main`/`master` 提交；分支必須以 `feature/`、`hotfix/` 或 `bugfix/` 開頭。
+- `pre-push`：同時檢查分支規範與 `screen_event_recorder.py` 的基礎編譯檢查。
+- CI（`.github/workflows/policy-check.yml`）：檢查 PR 分支命名並執行 `scripts/policy_check.py`。
+
+### Manual Check / 手動檢查
+
+```powershell
+d:\window_agent\.venv\Scripts\python.exe scripts/policy_check.py --stage pre-commit
+d:\window_agent\.venv\Scripts\python.exe scripts/policy_check.py --stage pre-push
+```
+
 ## Event + MP4 Auto Label Preview / 事件 + 影片自動標註預覽
 
 新增 `auto_label_from_events.py`，可將 `recordings/events_*.json` 與 `recordings/screen_*.mp4` 對齊後，抽取事件附近影格，呼叫 `tools/autolabel.py` 產生 LabelMe，並輸出 YOLO 標註到預覽資料夾。

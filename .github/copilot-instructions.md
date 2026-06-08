@@ -53,6 +53,17 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - Default to a complete answer with implementation summary and validation, not just the next suggested step.
 - Include the concrete verification command when changes affect runtime behavior.
 
+## Enforcement Contract
+- Treat this file as the single source of truth for workspace behavior across all models.
+- Non-negotiable rules:
+	- Do not modify code on `main` or `master`; always use `feature/YYYYMMDD-description` style branches.
+	- Run baseline verification after Python-related changes. At minimum, run `python -m py_compile screen_event_recorder.py`.
+	- Do not use destructive git commands (`git reset --hard`, `git checkout --`) unless explicitly requested.
+	- Report which verification command was run and whether it passed.
+- Operational guardrails:
+	- Local hooks run `scripts/policy_check.py` at `pre-commit` and `pre-push`.
+	- Team CI should run the same policy check in pull requests.
+
 <skills>
 Here is a list of skills that contain domain specific knowledge on a variety of topics.
 Each skill comes with a description of the topic and a file path that contains the detailed instructions.
@@ -61,5 +72,20 @@ When a user asks you to perform a task that falls within the domain of a skill, 
 <name>auto-label-video</name>
 <description>Use when user triggers auto-labeling workflow with patterns like "自動標註 XXX.mp4" or "autolabel XXX.mp4". Standardizes video frame extraction and SerpAPI-based class inference with minimal parameter entry.</description>
 <file>.github\skills\auto-label-video\SKILL.md</file>
+</skill>
+<skill>
+<name>python-task-flow</name>
+<description>Use for Python work such as debugging, refactoring, script updates, dataset processing, and end-to-end implementation plus validation.</description>
+<file>.github\skills\python-task-flow\SKILL.md</file>
+</skill>
+<skill>
+<name>greeting</name>
+<description>Use when the user greets (hello, hi, 哈囉) and provide a brief response in the same language.</description>
+<file>.github\skills\greeting\SKILL.md</file>
+</skill>
+<skill>
+<name>image-serpapi-analysis</name>
+<description>Use when the task requires analyzing an image with SerpApi image search results and structured interpretation.</description>
+<file>.github\skills\image-serpapi-analysis\SKILL.md</file>
 </skill>
 </skills>
