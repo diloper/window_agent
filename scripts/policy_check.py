@@ -28,6 +28,16 @@ def current_branch() -> str:
     return run_git_command(["rev-parse", "--abbrev-ref", "HEAD"])
 
 
+def merge_in_progress() -> bool:
+    merge_head = run_git_command(["rev-parse", "--git-path", "MERGE_HEAD"])
+    return Path(merge_head).exists()
+
+
+def head_is_merge_commit() -> bool:
+    head_with_parents = run_git_command(["rev-list", "--parents", "-n", "1", "HEAD"])
+    return len(head_with_parents.split()) >= 3
+
+
 def check_branch(stage: str, allow_main: bool) -> list[str]:
     branch = current_branch()
     errors: list[str] = []
@@ -39,6 +49,11 @@ def check_branch(stage: str, allow_main: bool) -> list[str]:
         return errors
 
     if branch in BLOCKED_BRANCHES and not allow_main:
+        # Allow protected-branch checks to pass for merge workflows only.
+        if stage == "pre-commit" and merge_in_progress():
+            return errors
+        if stage == "pre-push" and head_is_merge_commit():
+            return errors
         errors.append(
             f"[{stage}] direct work on '{branch}' is blocked. Use feature/YYYYMMDD-description."
         )
