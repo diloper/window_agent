@@ -124,8 +124,9 @@ def build_generate_content_config() -> types.GenerateContentConfig:
         types.Tool(googleSearch=types.GoogleSearch()),
     ]
     return types.GenerateContentConfig(
+        temperature=0,
         thinking_config=types.ThinkingConfig(
-            thinking_level="MINIMAL",
+            thinking_level="HIGH",
         ),
         tools=tools,
     )
