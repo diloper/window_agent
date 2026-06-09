@@ -48,6 +48,9 @@ def check_branch(stage: str, allow_main: bool) -> list[str]:
         )
         return errors
 
+    if stage == "pre-push" and branch in BLOCKED_BRANCHES:
+        return errors
+
     if branch in BLOCKED_BRANCHES and not allow_main:
         # Allow protected-branch checks to pass for merge workflows only.
         if stage == "pre-commit" and merge_in_progress():
