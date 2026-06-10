@@ -120,6 +120,8 @@ C:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
 
 - `recordings/auto_labels_preview/images`：抽出的事件附近影格
 - `recordings/auto_labels_preview/annotations_labelme`：LabelMe JSON
+- `recordings/auto_labels_preview/reports/similarity_groups.json`：ImageHash 相似圖片分群與同步摘要
+- `recordings/auto_labels_preview/reports/similarity_groups.csv`：相似群組逐筆明細
 - `recordings/auto_labels_preview/labels`：YOLO TXT
 - `recordings/auto_labels_preview/reports/manifest.csv`：逐樣本清單
 - `recordings/auto_labels_preview/reports/run_report.json`：執行摘要
@@ -129,6 +131,7 @@ C:\Users\User\miniconda3\python.exe auto_label_from_events.py ^
 - `--window-before-ms`、`--window-after-ms`：事件前後抽幀時間窗
 - `--max-frames-per-event`：每個事件最多抽樣幀數
 - `--label-policy serpapi-topk|fixed|crop-search-direct`：類別策略（預設為 `crop-search-direct`，使用 Google Lens 並直接採用 `top_repetition_result`）
+- `--similarity-threshold`：ImageHash 相似度門檻（預設 0.9），會在標註完成後對 `images/` 做分群，並把同群其它圖片的 labels 互相抄寫到目前 annotation（抄寫前會先檢查目標座標，避免重複覆蓋已存在的標記）
 - `--skip-autolabel`：只抽幀與產生報表，不跑 ONNX 推論
 
 ## SerpApi Image Search Example / SerpApi 圖片搜尋範例

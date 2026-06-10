@@ -158,6 +158,19 @@
 
 所有事件都直接套用 `--fixed-label`。
 
+### 5. ImageHash 相似圖分群與標註同步
+
+當每個 sample 完成初始標註與類別名稱統一後，程式會再執行一個後處理步驟：
+
+- 讀取 `images/` 下的每張圖片
+- 使用 `ImageHash` 的 `phash` 計算圖片雜湊值
+- 以 `--similarity-threshold`（預設 `0.9`）把相似圖片分成同一群
+- 蒐集群組內所有 annotation 的 labels 及其座標作為模板
+- 將群組內「其他圖片的 labels」互相抄寫（抄寫前會先檢查目標座標，避免重複覆蓋已存在的標記）
+- 匯出群組報告到 `reports/similarity_groups.json` 與 `reports/similarity_groups.csv`
+
+這個步驟的目標是讓重複或近似畫面維持一致標註，避免同一組 UI 片段出現不同 label。
+
 ### 5. `search_images()` 來源
 
 目前 `auto_label_from_events.py` 不再引用舊的 `serpapi_image_search_example.py`。
@@ -258,6 +271,8 @@ classes_preview.txt:
 
 - `classes_preview.txt`
 - `reports/manifest.csv`
+- `reports/similarity_groups.json`
+- `reports/similarity_groups.csv`
 - `reports/run_report.json`
 
 `manifest.csv` 會額外記錄：

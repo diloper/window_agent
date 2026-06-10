@@ -1,5 +1,6 @@
 import argparse
 import bisect
+import copy
 import csv
 import importlib.util
 import json
@@ -17,6 +18,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
+from PIL import Image
 
 import genai as genai_helper
 
@@ -26,6 +28,9 @@ _GOOGLE_SEARCH_RESULTS_LOAD_ERROR: Optional[Exception] = None
 
 _ANALYZE_CLASSES_MODULE: Optional[ModuleType] = None
 _ANALYZE_CLASSES_LOAD_ERROR: Optional[Exception] = None
+
+_IMAGEHASH_MODULE: Optional[ModuleType] = None
+_IMAGEHASH_LOAD_ERROR: Optional[Exception] = None
 
 
 try:
@@ -57,6 +62,13 @@ try:
     _ANALYZE_CLASSES_MODULE = _module
 except Exception as exc:
     _ANALYZE_CLASSES_LOAD_ERROR = exc
+
+try:
+    import imagehash as _imagehash_module
+
+    _IMAGEHASH_MODULE = _imagehash_module
+except Exception as exc:
+    _IMAGEHASH_LOAD_ERROR = exc
 
 
 def search_images(api_key: str, query: str, num: int = 10) -> Dict[str, Any]:
@@ -113,6 +125,12 @@ class FrameSample:
     crop_height: int = 0
     search_label: str = ""
     search_status: str = ""
+    similarity_hash: str = ""
+    similarity_group_id: int = 0
+    similarity_group_size: int = 0
+    similarity_representative: int = 0
+    similarity_sync_source: str = ""
+    similarity_status: str = ""
 
 
 class LocalClassProvider:
@@ -349,6 +367,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Auto-update mapping reference file after labeling (default: True)",
+    )
+    parser.add_argument(
+        "--similarity-threshold",
+        type=float,
+        default=0.9,
+        help="Minimum ImageHash similarity ratio for grouping similar images",
     )
     return parser.parse_args()
 
@@ -849,6 +873,352 @@ def load_image_bgr(image_path: Path) -> np.ndarray:
     return image
 
 
+def load_image_for_hash(image_path: Path) -> Image.Image:
+    if _IMAGEHASH_MODULE is None:
+        raise RuntimeError(f"Failed to load imagehash: {_IMAGEHASH_LOAD_ERROR}")
+
+    with Image.open(image_path) as image:
+        return image.convert("RGB")
+
+
+def compute_image_hash(image_path: Path) -> str:
+    if _IMAGEHASH_MODULE is None:
+        raise RuntimeError(f"Failed to load imagehash: {_IMAGEHASH_LOAD_ERROR}")
+
+    image = load_image_for_hash(image_path)
+    return str(_IMAGEHASH_MODULE.phash(image))
+
+
+def image_hash_similarity(hash_a: str, hash_b: str) -> float:
+    if _IMAGEHASH_MODULE is None:
+        raise RuntimeError(f"Failed to load imagehash: {_IMAGEHASH_LOAD_ERROR}")
+
+    parsed_a = _IMAGEHASH_MODULE.hex_to_hash(hash_a)
+    parsed_b = _IMAGEHASH_MODULE.hex_to_hash(hash_b)
+    bit_count = max(1, parsed_a.hash.size)
+    distance = parsed_a - parsed_b
+    return max(0.0, 1.0 - (distance / bit_count))
+
+
+def read_annotation_labels(annotation_path: Path) -> List[str]:
+    with annotation_path.open("r", encoding="utf-8") as fp:
+        payload = json.load(fp)
+
+    labels: List[str] = []
+    for shape in payload.get("shapes", []):
+        labels.append(str(shape.get("label", "object")))
+    return labels
+
+
+def shapes_overlap(shape1: Dict[str, Any], shape2: Dict[str, Any], iou_threshold: float = 0.1) -> bool:
+    """Check if two shapes overlap spatially based on bounding box IoU.
+    
+    Args:
+        shape1: First shape with 'points' field
+        shape2: Second shape with 'points' field
+        iou_threshold: Minimum IoU to consider as overlapping (default 0.1)
+    
+    Returns:
+        True if shapes overlap above threshold, False otherwise
+    """
+    points1 = shape1.get("points", [])
+    points2 = shape2.get("points", [])
+    
+    if not points1 or not points2:
+        return False
+    
+    # Get bounding boxes
+    xs1 = [float(p[0]) for p in points1]
+    ys1 = [float(p[1]) for p in points1]
+    xs2 = [float(p[0]) for p in points2]
+    ys2 = [float(p[1]) for p in points2]
+    
+    x1_min, x1_max = min(xs1), max(xs1)
+    y1_min, y1_max = min(ys1), max(ys1)
+    x2_min, x2_max = min(xs2), max(xs2)
+    y2_min, y2_max = min(ys2), max(ys2)
+    
+    # Calculate intersection
+    x_left = max(x1_min, x2_min)
+    y_top = max(y1_min, y2_min)
+    x_right = min(x1_max, x2_max)
+    y_bottom = min(y1_max, y2_max)
+    
+    if x_right < x_left or y_bottom < y_top:
+        return False  # No intersection
+    
+    intersection_area = (x_right - x_left) * (y_bottom - y_top)
+    
+    # Calculate union
+    box1_area = (x1_max - x1_min) * (y1_max - y1_min)
+    box2_area = (x2_max - x2_min) * (y2_max - y2_min)
+    union_area = box1_area + box2_area - intersection_area
+    
+    if union_area <= 0:
+        return False
+    
+    iou = intersection_area / union_area
+    return iou >= iou_threshold
+
+
+def merge_annotation_labels(annotation_path: Path, label_templates: Dict[str, Dict[str, Any]]) -> Tuple[List[str], List[str], List[str], int]:
+    """Merge labels from template shapes, avoiding spatial overlap with existing shapes.
+    
+    Args:
+        annotation_path: Path to the annotation JSON file
+        label_templates: Dict mapping label names to shape templates
+    
+    Returns:
+        Tuple of (labels_before, labels_after, labels_added, added_count)
+    """
+    with annotation_path.open("r", encoding="utf-8") as fp:
+        payload = json.load(fp)
+
+    shapes = payload.get("shapes", [])
+    before = [str(shape.get("label", "object")) for shape in shapes]
+    if not shapes:
+        return before, before, [], 0
+
+    added_labels: List[str] = []
+    added_shape_count = 0
+
+    for label, template_shape in label_templates.items():
+        normalized_label = str(label).strip()
+        if not normalized_label:
+            continue
+
+        # Check if template shape overlaps with any existing shape
+        overlaps_existing = False
+        for existing_shape in shapes:
+            if shapes_overlap(existing_shape, template_shape):
+                overlaps_existing = True
+                break
+        
+        if overlaps_existing:
+            continue  # Skip this label if it overlaps with existing annotations
+
+        # No spatial overlap, safe to add
+        new_shape = copy.deepcopy(template_shape)
+        new_shape["label"] = normalized_label
+        shapes.append(new_shape)
+        added_labels.append(normalized_label)
+        added_shape_count += 1
+
+    if added_shape_count > 0:
+        with annotation_path.open("w", encoding="utf-8") as fp:
+            json.dump(payload, fp, indent=2, ensure_ascii=False)
+
+    after = [str(shape.get("label", "object")) for shape in shapes]
+    return before, after, added_labels, added_shape_count
+
+
+def build_similarity_clusters(
+    samples: Sequence[FrameSample],
+    threshold: float,
+) -> List[Dict[str, Any]]:
+    if _IMAGEHASH_MODULE is None:
+        raise RuntimeError(f"Failed to load imagehash: {_IMAGEHASH_LOAD_ERROR}")
+
+    hash_entries: List[Dict[str, Any]] = []
+    for sample in samples:
+        if not sample.image_path.exists():
+            sample.similarity_status = "missing_image"
+            continue
+        try:
+            image_hash = compute_image_hash(sample.image_path)
+        except Exception as exc:
+            sample.similarity_status = f"hash_failed: {exc}"
+            continue
+
+        sample.similarity_hash = image_hash
+        sample.similarity_status = "hashed"
+        hash_entries.append({"sample": sample, "hash": image_hash})
+
+    if not hash_entries:
+        return []
+
+    parent = list(range(len(hash_entries)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        root_left = find(left)
+        root_right = find(right)
+        if root_left != root_right:
+            parent[root_right] = root_left
+
+    for left in range(len(hash_entries)):
+        for right in range(left + 1, len(hash_entries)):
+            similarity = image_hash_similarity(hash_entries[left]["hash"], hash_entries[right]["hash"])
+            if similarity >= threshold:
+                union(left, right)
+
+    grouped: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for index, entry in enumerate(hash_entries):
+        grouped[find(index)].append(entry)
+
+    clusters: List[Dict[str, Any]] = []
+    sorted_groups = sorted(
+        grouped.values(),
+        key=lambda group: min(item["sample"].sample_id for item in group),
+    )
+    for group_id, group_entries in enumerate(sorted_groups, start=1):
+        representative_entry = min(
+            group_entries,
+            key=lambda item: (item["sample"].status != "ok", item["sample"].sample_id),
+        )
+        representative_sample = representative_entry["sample"]
+
+        cluster_label_templates: Dict[str, Dict[str, Any]] = {}
+        canonical_labels: List[str] = []
+        for entry in group_entries:
+            sample = entry["sample"]
+            if not sample.annotation_path.exists():
+                continue
+            try:
+                with sample.annotation_path.open("r", encoding="utf-8") as fp:
+                    payload = json.load(fp)
+            except Exception:
+                continue
+
+            for shape in payload.get("shapes", []):
+                label = str(shape.get("label", "object")).strip()
+                if not label:
+                    continue
+                if label not in cluster_label_templates:
+                    cluster_label_templates[label] = shape
+                    canonical_labels.append(label)
+
+        cluster_members: List[Dict[str, Any]] = []
+        for entry in group_entries:
+            sample = entry["sample"]
+            similarity_to_rep = image_hash_similarity(representative_entry["hash"], entry["hash"])
+            sample.similarity_group_id = group_id
+            sample.similarity_group_size = len(group_entries)
+            sample.similarity_representative = representative_sample.sample_id
+            sample.similarity_status = sample.similarity_status or "clustered"
+            cluster_members.append(
+                {
+                    "sample_id": sample.sample_id,
+                    "event_id": sample.event_id,
+                    "image_path": str(sample.image_path),
+                    "annotation_path": str(sample.annotation_path),
+                    "hash": entry["hash"],
+                    "similarity_to_representative": round(similarity_to_rep, 6),
+                    "labels_before": read_annotation_labels(sample.annotation_path) if sample.annotation_path.exists() else [],
+                    "labels_after": [],
+                    "labels_added": [],
+                    "labels_added_count": 0,
+                    "sync_applied": False,
+                    "sync_source_sample_id": representative_sample.sample_id,
+                }
+            )
+
+        if cluster_label_templates:
+            for member in cluster_members:
+                member_sample = next(sample for sample in samples if sample.sample_id == member["sample_id"])
+                if member_sample.annotation_path.exists():
+                    before_labels, after_labels, labels_added, added_count = merge_annotation_labels(
+                        member_sample.annotation_path,
+                        cluster_label_templates,
+                    )
+                    member["labels_before"] = before_labels
+                    member["labels_after"] = after_labels
+                    member["labels_added"] = labels_added
+                    member["labels_added_count"] = added_count
+                    member["sync_applied"] = added_count > 0
+                    member_sample.similarity_sync_source = representative_sample.image_path.name
+                else:
+                    member["labels_after"] = []
+                    member["labels_added"] = []
+                    member["labels_added_count"] = 0
+        else:
+            for member in cluster_members:
+                member["labels_after"] = member["labels_before"]
+                member["labels_added"] = []
+                member["labels_added_count"] = 0
+
+        clusters.append(
+            {
+                "group_id": group_id,
+                "group_size": len(group_entries),
+                "representative_sample_id": representative_sample.sample_id,
+                "representative_image": str(representative_sample.image_path),
+                "representative_annotation": str(representative_sample.annotation_path),
+                "representative_hash": representative_entry["hash"],
+                "canonical_labels": canonical_labels,
+                "members": cluster_members,
+            }
+        )
+
+    return clusters
+
+
+def write_similarity_report(clusters: Sequence[Dict[str, Any]], reports_dir: Path, threshold: float) -> Tuple[Path, Path, int]:
+    json_path = reports_dir / "similarity_groups.json"
+    csv_path = reports_dir / "similarity_groups.csv"
+
+    summary = {
+        "threshold": threshold,
+        "hash_algorithm": "phash",
+        "group_count": len(clusters),
+        "synced_annotation_count": sum(
+            1 for cluster in clusters for member in cluster["members"] if member.get("sync_applied")
+        ),
+        "clusters": clusters,
+    }
+    with json_path.open("w", encoding="utf-8") as fp:
+        json.dump(summary, fp, indent=2, ensure_ascii=False)
+
+    csv_fields = [
+        "group_id",
+        "group_size",
+        "representative_sample_id",
+        "sample_id",
+        "event_id",
+        "image_path",
+        "annotation_path",
+        "hash",
+        "similarity_to_representative",
+        "sync_applied",
+        "sync_source_sample_id",
+        "labels_before",
+        "labels_after",
+        "labels_added",
+        "labels_added_count",
+    ]
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=csv_fields)
+        writer.writeheader()
+        for cluster in clusters:
+            for member in cluster["members"]:
+                writer.writerow(
+                    {
+                        "group_id": cluster["group_id"],
+                        "group_size": cluster["group_size"],
+                        "representative_sample_id": cluster["representative_sample_id"],
+                        "sample_id": member["sample_id"],
+                        "event_id": member["event_id"],
+                        "image_path": member["image_path"],
+                        "annotation_path": member["annotation_path"],
+                        "hash": member["hash"],
+                        "similarity_to_representative": member["similarity_to_representative"],
+                        "sync_applied": member["sync_applied"],
+                        "sync_source_sample_id": member["sync_source_sample_id"],
+                        "labels_before": " | ".join(member["labels_before"]),
+                        "labels_after": " | ".join(member["labels_after"]),
+                        "labels_added": " | ".join(member.get("labels_added", [])),
+                        "labels_added_count": member.get("labels_added_count", 0),
+                    }
+                )
+
+    return json_path, csv_path, summary["synced_annotation_count"]
+
+
 def read_first_shape_bbox(annotation_path: Path) -> Optional[Tuple[int, int, int, int]]:
     with annotation_path.open("r", encoding="utf-8") as fp:
         payload = json.load(fp)
@@ -1196,6 +1566,12 @@ def write_manifest(samples: Sequence[FrameSample], path: Path) -> None:
         "search_label",
         "search_status",
         "inferred_label",
+        "similarity_hash",
+        "similarity_group_id",
+        "similarity_group_size",
+        "similarity_representative",
+        "similarity_sync_source",
+        "similarity_status",
         "status",
         "error",
     ]
@@ -1221,6 +1597,12 @@ def write_manifest(samples: Sequence[FrameSample], path: Path) -> None:
                     "search_label": s.search_label,
                     "search_status": s.search_status,
                     "inferred_label": s.inferred_label,
+                    "similarity_hash": s.similarity_hash,
+                    "similarity_group_id": s.similarity_group_id,
+                    "similarity_group_size": s.similarity_group_size,
+                    "similarity_representative": s.similarity_representative,
+                    "similarity_sync_source": s.similarity_sync_source,
+                    "similarity_status": s.similarity_status,
                     "status": s.status,
                     "error": s.error,
                 }
@@ -1527,6 +1909,26 @@ def main() -> int:
         except Exception as exc:
             print(f"[WARN] Failed to load class mapping: {exc}. Continuing without mapping.")
 
+    similarity_clusters: List[Dict[str, Any]] = []
+    similarity_report_json: Optional[Path] = None
+    similarity_report_csv: Optional[Path] = None
+    similarity_synced_annotations = 0
+    if args.similarity_threshold > 0:
+        try:
+            similarity_clusters = build_similarity_clusters(samples, args.similarity_threshold)
+            if similarity_clusters:
+                similarity_report_json, similarity_report_csv, similarity_synced_annotations = write_similarity_report(
+                    similarity_clusters,
+                    reports_dir,
+                    args.similarity_threshold,
+                )
+                print(
+                    f"[INFO] Image similarity clustering completed: {len(similarity_clusters)} groups, "
+                    f"{similarity_synced_annotations} annotations synced"
+                )
+        except Exception as exc:
+            print(f"[WARN] Image similarity clustering failed: {exc}")
+
     class_order: List[str] = []
     if args.label_policy != "crop-search-direct":
         candidates = load_candidates(class_file)
@@ -1611,6 +2013,11 @@ def main() -> int:
         "labels_dir": str(labels_dir),
         "classes_file": str(classes_out),
         "manifest": str(manifest_path),
+        "similarity_threshold": args.similarity_threshold,
+        "similarity_group_count": len(similarity_clusters),
+        "similarity_synced_annotations": similarity_synced_annotations,
+        "similarity_report_json": str(similarity_report_json) if similarity_report_json else "",
+        "similarity_report_csv": str(similarity_report_csv) if similarity_report_csv else "",
     }
 
     report_path = reports_dir / "run_report.json"
