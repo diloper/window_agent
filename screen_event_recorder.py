@@ -53,6 +53,8 @@ class ScreenEventRecorder:
         self._caps_lock_pressed = False  # 跟踪 Caps Lock 按下狀態，避免重複觸發
         self._special_mode_key = None  # 記錄觸發特殊模式的鍵
         self._special_mode_timer = None  # 若未來需延伸為自動關閉可用
+        self._f9_last_press_monotonic = None
+        self._f9_double_press_window_seconds = 3.0
         
         # 覆盖层窗口
         self._indicator_window = None
@@ -402,6 +404,24 @@ class ScreenEventRecorder:
         raw_key = self._extract_raw_key(key)
         normalized_key = self._normalize_key(raw_key)
 
+        if self.recording and key == keyboard.Key.f9:
+            now = time.perf_counter()
+            last_press = self._f9_last_press_monotonic
+            if last_press is not None and (now - last_press) <= self._f9_double_press_window_seconds:
+                self._f9_last_press_monotonic = None
+                event = {
+                    'type': 'key_press',
+                    'key': normalized_key,
+                    'timestamp': self._relative_timestamp()
+                }
+                self._write_event(event)
+                print(f"按鍵: {normalized_key}")
+                print("偵測到 3 秒內連按兩次 F9，結束錄影")
+                self.stop_recording()
+                return
+
+            self._f9_last_press_monotonic = now
+
         # 檢測 Caps Lock 鍵切換特殊模式
         if key == keyboard.Key.caps_lock and not self._caps_lock_pressed:
             self._caps_lock_pressed = True
@@ -514,6 +534,7 @@ class ScreenEventRecorder:
 
         self.recording = True
         self.modifier_state = {'ctrl': False, 'shift': False, 'alt': False}
+        self._f9_last_press_monotonic = None
 
         if sync_marker_ms > 0:
             # sync_marker_start 固定 timestamp=0.0，作為事件日誌的時間原點錨點。
@@ -590,6 +611,7 @@ class ScreenEventRecorder:
     def stop_recording(self):
         """停止錄製"""
         self.recording = False
+        self._f9_last_press_monotonic = None
         
         # 清理特殊模式 Timer
         if self._special_mode_timer is not None:
@@ -602,7 +624,10 @@ class ScreenEventRecorder:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="同時錄製螢幕、鍵盤事件、滑鼠座標",
+        epilog="錄影進行中，3 秒內連按兩次 F9 可停止錄影。"
+    )
     parser.add_argument("-d", "--duration", type=int, default=60, help="錄影秒數 (預設60秒)")
     parser.add_argument(
         "--sync-marker-ms",
