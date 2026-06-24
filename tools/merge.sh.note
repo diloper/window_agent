@@ -1,0 +1,12 @@
+
+# 1. 切到 main
+git checkout main
+
+# 2. 拉最新 main（避免衝突）
+git pull origin main
+
+# 3. merge feature branch
+git merge feature/XXXXXX
+
+# 4. push 到遠端
+git push origin main
