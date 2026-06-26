@@ -16,6 +16,7 @@ Notes:
 """
 
 import argparse
+import locale
 import subprocess
 import sys
 import tempfile
@@ -33,7 +34,7 @@ def _run(cmd: list[str]) -> tuple[int, str, str]:
         cmd,
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding=locale.getpreferredencoding(False),
         errors="replace",
     )
     return result.returncode, result.stdout, result.stderr
@@ -45,7 +46,8 @@ def _get_interfaces() -> list[str]:
     interfaces = []
     for line in out.splitlines():
         stripped = line.strip()
-        if stripped.lower().startswith("name"):
+        # 英文 Windows: "Name", 中文 Windows: "名稱"
+        if stripped.lower().startswith("name") or stripped.startswith("名稱"):
             parts = stripped.split(":", 1)
             if len(parts) == 2:
                 interfaces.append(parts[1].strip())
@@ -57,12 +59,13 @@ def _profile_exists(ssid: str) -> bool:
     _, out, _ = _run(["netsh", "wlan", "show", "profiles"])
     for line in out.splitlines():
         stripped = line.strip()
-        # 中文 Windows: "所有使用者設定檔 : SSID"
-        # 英文 Windows: "All User Profile     : SSID"
-        if ":" in stripped:
-            profile_name = stripped.split(":", 1)[1].strip()
-            if profile_name.lower() == ssid.lower():
-                return True
+        # 中文: "所有使用者設定檔 : SSID"
+        # 英文: "All User Profile     : SSID"
+        if stripped.startswith("所有使用者設定檔") or stripped.lower().startswith("all user profile"):
+            if ":" in stripped:
+                profile_name = stripped.split(":", 1)[1].strip()
+                if profile_name.lower() == ssid.lower():
+                    return True
     return False
 
 
