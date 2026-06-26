@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """不使用第三方套件的鍵盤鋼琴模擬器.
 
-Audio    : 標準函式庫 winsound + wave 在記憶體合成 PCM WAV 後非阻塞播放
+Audio    : 標準函式庫 winsound + wave 在記憶體合成 PCM WAV 後播放
 Synthesis: 基音 + 3 個泛音 + 指數衰減包絡 (exponential decay)，模擬鋼琴音色
-Input    : 標準函式庫 msvcrt 即時讀取單一按鍵
+Polyphony: 多個音混音至同一緩衝區 → 同時按住多鍵可奇出和聲
+Input    : 標準函式庫 ctypes 呼叫 GetAsyncKeyState 即時偵測所有按住的鍵
 Range    : C4 ~ C6（兩個八度以上，含黑鍵 / 半音）
 Exit     : 按 Esc 離開
-Platform : Windows only（winsound / msvcrt 為 Windows 標準函式庫）
+Platform : Windows only（winsound / ctypes user32 為 Windows 標準函式庫）
 
 純標準函式庫，無任何第三方相依套件。
 """
 
 import argparse
+import ctypes
 import io
 import math
 import struct
@@ -21,16 +23,9 @@ import time
 import wave
 
 try:
-    import msvcrt
     import winsound
 except ImportError:  # pragma: no cover - 非 Windows 平台
-    msvcrt = None
     winsound = None
-
-try:
-    from pynput import keyboard as pynput_kb
-except ImportError:  # pragma: no cover
-    pynput_kb = None
 
 # ── Configuration ────────────────────────────────────────────────────────────
 SAMPLE_RATE   = 44100          # 取樣率 (Hz)
@@ -86,7 +81,6 @@ KEY_TO_MIDI = {
 }
 
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-ESC = "\x1b"
 
 
 def midi_to_freq(midi: int) -> float:
@@ -99,40 +93,63 @@ def midi_to_name(midi: int) -> str:
     return f"{NOTE_NAMES[midi % 12]}{midi // 12 - 1}"
 
 
-def synthesize_wav(freq: float, duration: float = NOTE_DURATION) -> bytes:
-    """合成單一音高的 WAV 位元組（基音 + 3 泛音 + 指數衰減）。"""
+def note_samples(freq: float, duration: float = NOTE_DURATION) -> list:
+    """合成單一音高的正規化浮點樣本（基音 + 3 泛音 + 指數衰減）。
+
+    回傳值約落在 [-1.0, 1.0]，尚未套用主振幅，方便後續混音。
+    """
     num_samples = int(SAMPLE_RATE * duration)
-    max_int = (1 << (BITS - 1)) - 1
-    frames = bytearray()
-
-    # 預先正規化泛音總振幅，避免疊加後削波
     harmonic_norm = sum(amp for _, amp in HARMONICS)
-
+    out = [0.0] * num_samples
     for i in range(num_samples):
         t = i / SAMPLE_RATE
         envelope = math.exp(-DECAY * t)        # 指數衰減包絡
         sample = 0.0
         for ratio, amp in HARMONICS:
             sample += amp * math.sin(2.0 * math.pi * freq * ratio * t)
-        sample = (sample / harmonic_norm) * envelope * AMPLITUDE
-        value = int(max(-1.0, min(1.0, sample)) * max_int)
-        frames += struct.pack("<h", value)
+        out[i] = (sample / harmonic_norm) * envelope
+    return out
+
+
+def samples_to_wav(voices: list) -> bytes:
+    """將一個或多個音的樣本陣列混音成單一 WAV 位元組。
+
+    多個音同時混入同一緩衝區即可奇出和聲；以發聲數正規化避免削波。
+    """
+    if not voices:
+        return b""
+    length = len(voices[0])
+    count = len(voices)
+    max_int = (1 << (BITS - 1)) - 1
+    ints = [0] * length
+    for i in range(length):
+        total = 0.0
+        for v in voices:
+            total += v[i]
+        total = (total / count) * AMPLITUDE     # 依發聲數正規化
+        ints[i] = int(max(-1.0, min(1.0, total)) * max_int)
+    data = struct.pack("<%dh" % length, *ints)
 
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav:
         wav.setnchannels(1)
         wav.setsampwidth(BITS // 8)
         wav.setframerate(SAMPLE_RATE)
-        wav.writeframes(bytes(frames))
+        wav.writeframes(data)
     return buffer.getvalue()
 
 
-def build_sound_cache() -> dict:
-    """為所有對應到的 MIDI 音預先合成並快取 WAV 位元組，避免按鍵延遲。"""
-    cache = {}
-    for midi in sorted(set(KEY_TO_MIDI.values())):
-        cache[midi] = synthesize_wav(midi_to_freq(midi))
-    return cache
+def synthesize_wav(freq: float, duration: float = NOTE_DURATION) -> bytes:
+    """合成單一音高的 WAV 位元組。"""
+    return samples_to_wav([note_samples(freq, duration)])
+
+
+def build_sample_cache() -> dict:
+    """預先合成每個 MIDI 音的樣本陣列，供即時混音奇和聲。"""
+    return {
+        midi: note_samples(midi_to_freq(midi))
+        for midi in sorted(set(KEY_TO_MIDI.values()))
+    }
 
 
 def play(data: bytes) -> None:
@@ -141,6 +158,8 @@ def play(data: bytes) -> None:
     winsound 不允許 SND_MEMORY 與 SND_ASYNC 並用，故改在 daemon 累程中
     同步播放，讓互動主迴圈保持反應。
     """
+    if not data:
+        return
     threading.Thread(
         target=winsound.PlaySound,
         args=(data, winsound.SND_MEMORY),
@@ -159,75 +178,45 @@ def print_keymap() -> None:
 
 
 def run_interactive() -> int:
-    """即時鍵盤演奏主迴圈（支援同時按住多鍵奏出和聲）。"""
+    """即時鍵盤演奏主迴圈（用 GetAsyncKeyState 偵測同時按住多鍵以奏和聲）。"""
     if winsound is None:
         print("此程式需要 Windows 環境（winsound）。", file=sys.stderr)
         return 1
+    try:
+        user32 = ctypes.windll.user32
+    except AttributeError:  # pragma: no cover - 非 Windows 平台
+        print("此程式需要 Windows 環境（GetAsyncKeyState）。", file=sys.stderr)
+        return 1
+    user32.GetAsyncKeyState.restype = ctypes.c_short
+    user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
 
     print("正在合成音色…")
-    cache = build_sound_cache()
+    cache = build_sample_cache()
     print_keymap()
-    print("開始演奏！單鍵發音；同時按住多鍵可奏出和聲；Esc 離開。\n")
+    print("開始演奏！單鍵發音；同時按住多鍵即可奏出和聲；Esc 離開。\n")
 
-    # ── fallback：pynput 不可用時退回 msvcrt 單鍵模式 ──
-    if pynput_kb is None:
-        if msvcrt is None:
-            print("[ERROR] msvcrt / pynput 均不可用。", file=sys.stderr)
-            return 1
-        while True:
-            ch = msvcrt.getwch()
-            if ch == ESC:
-                break
-            midi = KEY_TO_MIDI.get(ch.lower())
-            if midi is not None:
-                play(cache[midi])
-        print("\n再見！")
-        return 0
+    VK_ESCAPE = 0x1B
+    key_to_vk = {key: ord(key.upper()) for key in KEY_TO_MIDI}
 
-    # ── pynput 模式：press/release 追蹤多鍵同時按下 ──
-    held: set[str] = set()   # 目前按住的小寫字元集合
-    done = threading.Event()
+    def is_down(vk: int) -> bool:
+        return bool(user32.GetAsyncKeyState(vk) & 0x8000)
 
-    def _refresh_display() -> None:
-        """在同一行顯示目前按住的所有音名（和聲預覽）。"""
-        held_midi = sorted(KEY_TO_MIDI[k] for k in held if k in KEY_TO_MIDI)
-        if held_midi:
-            chord = " + ".join(midi_to_name(m) for m in held_midi)
-            print(f"\r  \u266a {chord:<44}", end="", flush=True)
-        else:
-            print(f"\r{' ' * 50}\r", end="", flush=True)
-
-    def on_press(key):
-        try:
-            ch = key.char
-        except AttributeError:
-            if key == pynput_kb.Key.esc:
-                done.set()
-                return False   # 停止 Listener
-            return
-        if not ch:
-            return
-        lower = ch.lower()
-        if lower in held:
-            return             # 按住不放產生的重複事件，忽略
-        midi = KEY_TO_MIDI.get(lower)
-        if midi is not None:
-            held.add(lower)
-            play(cache[midi]) # 非阻塞，與其他正在播放的音自然疊合
-            _refresh_display()
-
-    def on_release(key):
-        try:
-            ch = key.char
-            if ch:
-                held.discard(ch.lower())
-                _refresh_display()
-        except AttributeError:
-            pass
-
-    with pynput_kb.Listener(on_press=on_press, on_release=on_release) as listener:
-        done.wait()
-        listener.stop()
+    prev = frozenset()
+    while True:
+        if is_down(VK_ESCAPE):
+            break
+        pressed = frozenset(
+            midi for key, midi in KEY_TO_MIDI.items() if is_down(key_to_vk[key])
+        )
+        if pressed - prev:                      # 有新按下的鍵 → 重新觸發整組和聲
+            chord = sorted(pressed)
+            play(samples_to_wav([cache[m] for m in chord]))
+            names = " + ".join(midi_to_name(m) for m in chord)
+            print(f"\r  \u266a {names:<48}", end="", flush=True)
+        elif not pressed and prev:              # 全部放開 → 清除顯示
+            print(f"\r{' ' * 52}\r", end="", flush=True)
+        prev = pressed
+        time.sleep(0.01)
 
     print("\n再見！")
     return 0
@@ -247,6 +236,21 @@ def run_demo() -> int:
         play(synthesize_wav(midi_to_freq(midi)))
         time.sleep(step)
     time.sleep(NOTE_DURATION)  # 讓最後一音播放完整
+
+    print("Demo：示範同時發聲的和聲（多音混入單一緩衝區）…")
+    cache = build_sample_cache()
+    chords = [
+        ("C 大三和弦", [60, 64, 67]),
+        ("F 大三和弦", [65, 69, 72]),
+        ("G 大三和弦", [67, 71, 74]),
+        ("C 大三和弦（八度疊加）", [60, 64, 67, 72]),
+    ]
+    for label, midis in chords:
+        names = " + ".join(midi_to_name(m) for m in midis)
+        print(f"  {label}: {names}")
+        play(samples_to_wav([cache[m] for m in midis]))
+        time.sleep(NOTE_DURATION * 1.1)
+    time.sleep(NOTE_DURATION)  # 讓最後一組和聲播放完整
     print("Demo 完成。")
     return 0
 
