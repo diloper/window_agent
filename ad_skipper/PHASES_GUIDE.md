@@ -21,7 +21,27 @@
 
 ### 執行方式
 
-以真實 Chrome 設定檔（最容易觸發真實廣告）收集：
+**建議做法（不必關閉你平常的 Chrome）**：用一個**專供自動化的獨立 profile 資料夾**，
+就不會跟正在執行的 Chrome 搶同一份設定檔（避免 profile lock）：
+
+```powershell
+Set-Location R:\SAM
+R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
+  --query "popular music video 2024" `
+  --url-limit 15 `
+  --profile "R:\SAM\ad_skipper\chrome_profile" `
+  --max-frames 300 `
+  --frames-per-ad 4 `
+  --neg-ratio 0.4 `
+  --vary-layout `
+  --draw
+```
+
+> 首次執行會自動建立 `R:\SAM\ad_skipper\chrome_profile`（全新、未登入）。
+> YouTube 在未登入狀態仍會播放廣告，足以收集 skip 按鈕影像。
+
+**若一定要用你已登入的真實帳號**（如 `Profile 16`），必須**先完全關閉所有 Chrome 視窗**
+（含背景程序），否則該設定檔被佔用會啟動失敗，再執行：
 
 ```powershell
 Set-Location R:\SAM
@@ -29,12 +49,20 @@ R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
   --query "popular music video 2024" `
   --url-limit 15 `
   --profile "C:\Users\User\AppData\Local\Google\Chrome\User Data" `
+  --profile-directory "Profile 16" `
   --max-frames 300 `
-  --frames-per-ad 4 `
   --neg-ratio 0.4 `
   --vary-layout `
   --draw
 ```
+
+> **多組帳號如何指定？** `--profile` 指向最外層的 `User Data` 父資料夾；
+> `--profile-directory` 才是選哪個帳號，值要填**資料夾名稱**（如 `Profile 16`、`Default`），
+> 不是 Chrome 內顯示的暱稱。不指定時預設用 `Default`。
+>
+> **常見錯誤** `SessionNotCreatedException: ... Chrome instance exited`：
+> 代表目標設定檔正被另一個執行中的 Chrome 佔用（profile lock）。
+> 解法：改用上面的獨立 `--profile` 資料夾，或先關閉所有 Chrome 再用真實帳號。
 
 或指定明確影片網址：
 
@@ -51,6 +79,7 @@ R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
 | `--urls` / `--query` | 二擇一（必填） | 影片來源：明確網址清單，或搜尋字串 |
 | `--url-limit` | 15 | 由 `--query` 解析的最大影片數 |
 | `--profile` | 無 | Chrome user-data-dir；用真實設定檔才有真實廣告 |
+| `--profile-directory` | `Default` | 多帳號時選用的 profile 資料夾名稱（如 `Profile 16`） |
 | `--monitor` | 1 | mss 螢幕索引（1 = 主螢幕） |
 | `--poll-interval` | 0.4 | 播放器輪詢秒數 |
 | `--max-frames` | 300 | 收集到此影格數即停止 |

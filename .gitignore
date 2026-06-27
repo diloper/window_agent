@@ -49,3 +49,4 @@ ad_skipper/dataset/labels/
 ad_skipper/dataset/raw_boxes/
 ad_skipper/dataset/yolo/
 ad_skipper/ad_skipper_dataset.zip
+ad_skipper/chrome_profile/

@@ -97,13 +97,15 @@ def _set_low_priority() -> None:
         pass
 
 
-def _build_driver(profile: Optional[str], headless: bool):
+def _build_driver(profile: Optional[str], profile_directory: Optional[str], headless: bool):
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
 
     options = Options()
     if profile:
         options.add_argument(f"--user-data-dir={profile}")
+        if profile_directory:
+            options.add_argument(f"--profile-directory={profile_directory}")
     if headless:
         options.add_argument("--headless=new")
     options.add_argument("--autoplay-policy=no-user-gesture-required")
@@ -218,7 +220,7 @@ def harvest(args: argparse.Namespace) -> int:
     capture = ScreenCapture(monitor_index=args.monitor)
     mon_left, mon_top = capture.monitor_offset()
 
-    driver = _build_driver(args.profile, args.headless)
+    driver = _build_driver(args.profile, args.profile_directory, args.headless)
     saved = 0
     saved_pos = 0
     saved_neg = 0
@@ -337,6 +339,11 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("--query", help="YouTube search query to source videos")
     p.add_argument("--url-limit", type=int, default=15, help="Max videos to resolve from --query")
     p.add_argument("--profile", help="Chrome user-data-dir (real profile = real ads)")
+    p.add_argument(
+        "--profile-directory",
+        default="Default",
+        help="Chrome profile folder name to pick an account (e.g. 'Default', 'Profile 16')",
+    )
     p.add_argument("--monitor", type=int, default=1, help="mss monitor index (1=primary)")
     p.add_argument("--poll-interval", type=float, default=0.4, help="Player poll seconds")
     p.add_argument("--max-frames", type=int, default=300, help="Stop after this many saved frames")
