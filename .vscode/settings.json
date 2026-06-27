@@ -11,9 +11,9 @@
     },
     // 2) 指定 uv 產生的 venv interpreter
     "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
-    // 3) 不要讓 VS Code 自動去 activate conda/venv（避免跟 uv 打架）
+    // 3) 讓 VS Code 終端機自動 activate 這個 venv
     "python.terminal.activateEnvironment": true,
-    "python-envs.terminal.autoActivationType": "disabled",
+    "python-envs.terminal.autoActivationType": "command",
     // 4)（可選）uv 參數：避免 hardlink 警告、或你有 proxy/cert 需求可以放這
     "terminal.integrated.env.windows": {
         "HTTP_PROXY": "${env:MY_PROXY}",
