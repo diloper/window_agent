@@ -109,6 +109,79 @@ R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
 - [ ] 不同影片/廣告的檔名前綴帶有不同 `group` 鍵（`<session>_<adIdx>`）。
 - [ ] 收集期間未明顯卡住使用者操作（低優先權執行，CPU 未長期飽和）。
 
+### 人工抽查（肉眼確認紅框）
+
+`--draw` 疊圖會輸出到 `ad_skipper/dataset/debug/<group>_<seq>.png`（與影格同名），
+**只有正樣本**（有 bbox）才會產生疊圖。抽查方式由簡到進階：
+
+1. **直接看**：開檔案總管切「大圖示」一次掃過縮圖。
+   ```powershell
+   Set-Location R:\SAM
+   explorer ad_skipper\dataset\debug
+   ```
+2. **隨機抽幾張**集中檢視（符合「隨機抽查」）：
+   ```powershell
+   Set-Location R:\SAM
+   $dst = "ad_skipper\dataset\_spotcheck"
+   New-Item -ItemType Directory -Force $dst | Out-Null
+   Get-ChildItem ad_skipper\dataset\debug -Filter *.png | Get-Random -Count 8 |
+     Copy-Item -Destination $dst
+   explorer $dst   # 看完可刪除 _spotcheck
+   ```
+
+檢查重點：紅框**完整包住**「略過廣告」按鈕、未偏移、未框到廣告其他區域；
+不同 `group`（不同影片/廣告）都有抽到。
+
+### 不良樣本處理
+
+每個影格共用同一檔名於四個資料夾（`images/.png`、`labels/.txt`、`raw_boxes/.json`、`debug/.png`），
+**處理時要一起動**，否則 Phase 3 切分會因影像/標註數量不對應而出錯。
+
+| 狀況 | 建議處理 |
+|---|---|
+| 框完全錯位 / 框到非按鈕 | **整筆刪除**（重收較划算） |
+| 畫面無效（全黑、轉場模糊、被彈窗遮住） | **整筆刪除** |
+| 沒有 skip 按鈕卻被當正樣本 | **整筆刪除** |
+| 重複度過高（同段廣告幾乎一樣） | 留 1～2 張，其餘刪除 |
+| 框略偏但仍大致包住按鈕 | 可**修標註**或直接刪 |
+
+> 原則：**錯標比少資料更傷**，寧可刪掉也不要留錯框。
+
+**整筆刪除**（依檔名連帶刪四個檔；debug 圖建議一起刪）：
+
+```powershell
+Set-Location R:\SAM\ad_skipper\dataset
+$bad = @(
+  "20260627-153000_00_0002",
+  "20260627-153000_01_0000"
+)
+foreach ($n in $bad) {
+  Remove-Item "images\$n.png","labels\$n.txt","raw_boxes\$n.json","debug\$n.png" -ErrorAction SilentlyContinue
+}
+```
+
+**只修標註**（框略偏時）：`labels/<name>.txt` 為一行正規化 YOLO 格式 `0 cx cy w h`（皆 0..1）。
+手算易錯，建議用標註工具重畫一格：
+
+```powershell
+Set-Location R:\SAM
+R:\SAM\.venv\Scripts\python.exe -m pip install labelImg
+R:\SAM\.venv\Scripts\python.exe -m labelImg ad_skipper\dataset\images ad_skipper\ad_classes.txt ad_skipper\dataset\labels
+```
+
+**處理後一致性檢查**（跑 Phase 3 前必做，確認無孤兒檔）：
+
+```powershell
+Set-Location R:\SAM\ad_skipper\dataset
+$imgs = (Get-ChildItem images\*.png | ForEach-Object BaseName)
+$lbls = (Get-ChildItem labels\*.txt | ForEach-Object BaseName)
+"images: $($imgs.Count)  labels: $($lbls.Count)"
+Compare-Object $imgs $lbls   # 無輸出 = 完全對應；有輸出 = 有缺漏需補
+```
+
+> 若整體不良率偏高，別逐張修——回 Phase 1 重收並先固定視窗大小（暫不用 `--vary-layout`）
+> 收一小批驗證座標換算（`--monitor`、DPR）是否正確。
+
 > 收集完成後接 Phase 3 切分資料：
 > `R:\SAM\.venv\Scripts\python.exe ad_skipper\prepare_ad_dataset.py --train-ratio 0.8`
 > 產出 `ad_skipper/dataset/yolo/{train,val}` 與 `data.yaml`，且**同一 group 不跨 train/val**。
