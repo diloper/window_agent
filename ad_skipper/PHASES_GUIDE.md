@@ -27,7 +27,7 @@
 ```powershell
 Set-Location R:\SAM
 R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
-  --query "popular music video 2024" `
+  --query "popular music video " `
   --url-limit 15 `
   --profile "R:\SAM\ad_skipper\chrome_profile" `
   --max-frames 300 `
@@ -89,15 +89,19 @@ R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
 | `--vary-layout` | off | 隨機視窗大小/位置，增加資料多樣性 |
 | `--headless` | off | 無頭模式（廣告較少，**不建議用於收集**） |
 | `--draw` | off | 另存 bbox 疊圖供人工檢視 |
+| `--collect-popups` | on | 同時收集 YouTube 阻擋彈窗的「關閉鍵」作為 class 1（`--no-collect-popups` 關閉） |
+| `--frames-per-popup` | 3 | 每個彈窗實例擷取的影格數 |
+| `--dismiss-popups` | on | 擷取後點擊關閉鍵以解除阻擋（`--no-dismiss-popups` 只收集不點擊） |
 | `--quiet` | off | 關閉狀態輸出（**預設為 verbose**，會持續印出 `[collect]` 目前狀態） |
 | `--session-id` | 時間戳 | 分組鍵（group key），避免 train/val 洩漏 |
 
 ### 產出
 
 - `ad_skipper/dataset/images/*.png` — 影格
-- `ad_skipper/dataset/labels/*.txt` — YOLO 格式標註（class 0 = `skip_ad_button`）
-- `ad_skipper/dataset/raw_boxes/*.json` — 含 `group` 鍵的原始框資訊
+- `ad_skipper/dataset/labels/*.txt` — YOLO 格式標註（class 0 = `skip_ad_button`；class 1 = `popup_dismiss_button`）
+- `ad_skipper/dataset/raw_boxes/*.json` — 含 `group`、`class_id` 鍵的原始框資訊
 - `--draw` 時另存疊圖除錯影像
+- 彈窗樣本檔名前綴為 `<session>-popup-<hash>`，標註行為 `1 cx cy w h`
 
 ### 驗收標準
 
@@ -108,6 +112,8 @@ R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
 - [ ] 隨機抽查 `--draw` 疊圖，紅框準確框住「略過廣告」按鈕。
 - [ ] 不同影片/廣告的檔名前綴帶有不同 `group` 鍵（`<session>_<adIdx>`）。
 - [ ] 收集期間未明顯卡住使用者操作（低優先權執行，CPU 未長期飽和）。
+- [ ] 若觸發 YouTube 阻擋彈窗，產生 `<session>-popup-*` 影格，標註行為 `1 cx cy w h`（class 1）。
+- [ ] Phase 3 之後 `data.yaml` 顯示 `nc: 2`，且 `names` 同時含 `skip_ad_button` 與 `popup_dismiss_button`。
 
 ### 人工抽查（肉眼確認紅框）
 

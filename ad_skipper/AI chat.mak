@@ -1,131 +1,134 @@
-# Plan: YouTube Skip-Ad — YOLO self-trained pipeline
+# YouTube Skip-Ad YOLO — Agent Brief (design + status)
 
-Task: 當 YouTube 進入廣告時自動點擊略過, via 自行訓練的 YOLO model.
-自動收集影像數據 + 自動標註 + 本地訓練 + 推論點擊.
+> READ ORDER for any agent: §1 Status → §2 Ground-truth facts → §4 Active task.
+> Rule: describe ONLY what the repo actually contains. If unsure, open the file
+> and check. Do NOT invent flags, files, or behaviors.
+> Python interpreter (always): `R:\SAM\.venv\Scripts\python.exe`
+> User-facing run manual: `ad_skipper/PHASES_GUIDE.md`. This file = design/decision source.
 
-## Decisions (from user)
-- Approach: C. Train own YOLO model (pivot from OCR-only)
-- Runtime detector: YOLO IS REQUIRED at runtime. Inference runs on the user's NORMAL browser/desktop (NOT a Selenium-controlled session), so on-screen visual detection is needed. Selenium is used ONLY for data harvesting/labeling in Phase 1, NOT at runtime.
-- Dataset isolation: SEPARATE new folders, keep existing ./A, ./labels, classes.txt clean
-- Auto-collect: Selenium DOM as primary ad trigger + exact auto-label (OCR demoted to optional fallback)
-- Image capture: mss real-desktop capture (so training frames match runtime inference)
-- Browser: headed Chrome with user profile
-- Capture diversity: vary window size, fullscreen/windowed/theater, light/dark theme, resolution/DPR across sessions so the model generalizes (capture-time variety > augmentation)
-- Negatives: dataset must include ~30-50% negative + HARD-negative frames (other player buttons, pre-skip ad, end-cards) for low false-click rate
-- Labeling: Phase 1 writes YOLO labels DIRECTLY (knows dims+bbox at capture); Phase 2 is OPTIONAL manual review/refine only
-- Runtime click: cursor-preserving (save/restore mouse pos; no warp) + require box stable across >=2 frames before clicking
-- Shared capture/coord helper reused by collect + skipper (DRY, identical train/inference capture)
-- Train/val split: GROUP-AWARE by capture session / ad instance (NOT random per-frame) to avoid leakage of near-duplicate frames
-- Training: GOOGLE COLAB (non-local) via Train_Skip_Ad_Colab.ipynb + export_for_colab.py packaging; local train_skip_model.py kept as optional fallback
-- Click lib: pyautogui (new dep)
-- Constraint: auto-collect must NOT interfere with user input and must NOT overload CPU
-- Packaging: ALL generated files under a new folder `ad_skipper/`
+## 0. Goal
+When YouTube shows an ad, use a self-trained YOLO model to detect the "Skip Ad" button
+on the user's real desktop and click it automatically. Data flow: auto-collect frames +
+auto-label → train on Google Colab → local inference + click.
 
-## Pipeline (5 phases)
+## 1. Status (read first)
 
-### Phase 1 — Auto collect (ad_skipper/collect_ad_frames.py, NEW) — SELENIUM-DRIVEN
-Decisions: Selenium DOM = primary ad trigger + exact auto-label; mss real-desktop capture for training images; headed Chrome with user profile.
-CONSTRAINT: must NOT interfere with user input and must NOT overload CPU.
+### BUILT — already implemented and merged to `main`
+- Five-phase pipeline scripts all exist under `ad_skipper/`:
+  `_capture.py`, `collect_ad_frames.py`, `auto_label_skip_button.py`,
+  `prepare_ad_dataset.py`, `export_for_colab.py`, `train_skip_model.py`,
+  `youtube_ad_skipper.py`, `Train_Skip_Ad_Colab.ipynb`, `PHASES_GUIDE.md`.
+- Single class today: `ad_classes.txt` = one line `skip_ad_button` (class 0); `data.yaml` nc=1.
 
-Mechanism:
-- Launch headed Chrome via Selenium (selenium 4 + webdriver-manager) with user-data-dir = user's Chrome profile (--profile arg). Real ads, fewer bot blocks. NO YouTube Premium account.
-- CAPTURE DIVERSITY (#2, key for generalization): across/within sessions randomize browser window size, windowed vs fullscreen vs theater mode, light/dark theme, and run on different resolutions/DPR when possible. The skip button's position/scale/background must vary or the model overfits one layout. argparse --vary-layout to toggle automated variation.
-- Auto-watch loop: iterate a URL list / search results / playlist (--urls or --query); driver.get(video); ensure playing.
-- Ad detection (deterministic, polled ~every 0.3-0.5s via execute_script):
-  * player = document.querySelector('#movie_player'); ad active when player.classList contains 'ad-showing' (or 'ad-interrupting'), OR player.getAdState()===1.
-  * confirm a skip button exists: querySelector('.ytp-ad-skip-button-modern, .ytp-ad-skip-button, .ytp-skip-ad-button').
-- When ad-showing AND skip button present/visible:
-  1. Get button bbox via Selenium element.rect (CSS px, viewport-relative).
-  2. Capture the REAL desktop with mss (so frames match runtime inference look incl. OS/browser chrome).
-  3. Map element.rect -> screen device px:
-       toolbarH = window.outerHeight - window.innerHeight; winRect = driver.get_window_rect(); dpr = window.devicePixelRatio.
-       screen_x = (winRect.x + rect.x) * dpr; screen_y = (winRect.y + toolbarH + rect.y) * dpr; w = rect.width*dpr; h = rect.height*dpr.
-       (Fallback for exactness: CDP Page.getLayoutMetrics / Page.captureScreenshot if mapping drifts.)
-  4. Save PNG -> ad_skipper/dataset/images/<session>_<adIdx>_<seq>.png. WRITE YOLO LABEL DIRECTLY (#5): normalize bbox by image w/h -> ad_skipper/dataset/labels/<frame>.txt (`0 cx cy w h`). Also dump raw bbox + group metadata -> ad_skipper/dataset/raw_boxes/<frame>.json for traceability/review.
-     - GROUP KEY for split-leakage prevention: session_id (one run/launch) + ad_instance index (each distinct ad encounter). ALL frames of one ad instance share the same group key, embedded in BOTH the filename prefix and the json ("group": "<session>_<adIdx>").
-  5. Capture multiple frames across the ad (skip btn appears after ~5s countdown) before optionally clicking skip to move on. These multi-frames are near-duplicates -> MUST stay together in one split (see Phase 3).
-- NEGATIVE / HARD-NEGATIVE frames (#6): target ~30-50% of dataset as negatives with EMPTY label files:
-  * easy negatives: normal video playback (ad-showing False).
-  * hard negatives: ad showing but BEFORE skip button appears (countdown), and frames containing OTHER player buttons (mute/settings/fullscreen/next), end-cards/cards. Forces the model to learn the skip button specifically, not "any button" -> fewer false clicks at runtime.
-- VERIFY mapping: overlay saved bbox on saved frame (debug --draw) to confirm alignment before mass harvest.
+### IN PROGRESS — the ONLY task on the current branch
+- Branch: `feature/20260627-collect-popup-class`.
+- Add class 1 `popup_dismiss_button`: also collect YouTube blocking-popup dismiss
+  buttons as YOLO samples. Full spec in §4.
+- CODE DONE (not yet committed/merged): `ad_classes.txt` now has 2 lines (nc=2 auto);
+  `collect_ad_frames.py` has `POPUP_DISMISS_SELECTORS/TEXTS`, `_POPUP_STATE_JS`/`_POPUP_CLICK_JS`,
+  parametrized `_save_frame(class_id=...)`, `_maybe_collect_popup()`/`_dismiss_popup()`,
+  flags `--collect-popups`/`--frames-per-popup`/`--dismiss-popups`; `PHASES_GUIDE.md` updated.
+  Verified: py_compile OK, `-h` lists the 3 flags, `_load_classes()` → 2 classes.
+  Still pending: headed live test on a popup-triggering profile.
 
-Non-intrusive + low CPU:
-- Selenium drives ITS OWN browser window; does not hijack user's foreground input. Run headed but user can leave it; no global hotkeys, no input simulation on user's apps.
-- Below-normal process priority (psutil). mss grab only fires on ad-showing events, not every frame -> low CPU. Polling uses lightweight execute_script, sleeps between polls (--poll-interval).
-- dedupe via imagehash (already in auto_label_from_events.py).
-- Uses SHARED capture/coord helper (#12) ad_skipper/_capture.py for mss grab + element.rect->screen-px mapping; same helper used by Phase 5 so train and inference capture are IDENTICAL.
-- argparse: --urls/--query --profile --monitor --poll-interval --max-frames --frames-per-ad --neg-ratio --vary-layout --out-dir --draw --priority
-- NEW dep: selenium (+ webdriver-manager). easyocr now only OPTIONAL fallback labeler.
+## 2. Ground-truth facts (verify before relying on them)
+- Class source of truth: `ad_classes.txt`. `prepare_ad_dataset.py` and
+  `export_for_colab.py` both `_load_classes()` from it and auto-write `nc` / `names`
+  into `data.yaml`. Adding a 2nd line ⇒ nc=2 automatically; those two scripts need NO change.
+- `collect_ad_frames.py` REAL CLI flags (do not invent others):
+  `--urls`/`--query` (mutually exclusive, required), `--url-limit`, `--profile`,
+  `--profile-directory`, `--monitor`, `--poll-interval`, `--max-frames`,
+  `--frames-per-ad`, `--neg-ratio`, `--per-video-seconds`, `--vary-layout`,
+  `--headless`, `--draw`, `--quiet`, `--session-id`.
+- `collect_ad_frames.py` internals that matter for §4:
+  - `_save_frame()` currently HARD-CODES class `0` in the label line → must be parametrized.
+  - `_PLAYER_STATE_JS` returns the player's skip-button rect ONLY (player-scoped).
+    A new page-level popup JS is needed (popups live outside `#movie_player`).
+  - `harvest()` watch loop polls player state per video; consent/cookie walls usually
+    appear at the FIRST navigation (inside `_resolve_video_urls`).
+  - Verbose is ON by default via `_log()`; `--quiet` silences it.
+- Coordinate mapping helper: `_capture.py::viewport_rect_to_image_bbox(rect, window_rect,
+  toolbar_height, device_pixel_ratio, monitor_left, monitor_top)` and `BBox.to_yolo()`.
+  Reusable for popup rects too — `_capture.py` does NOT need changes.
+- Dataset layout: `ad_skipper/dataset/{images,labels,raw_boxes}/` (+ `debug/` when `--draw`);
+  Phase 3 emits `dataset/yolo/{train,val}/{images,labels}` + `data.yaml`.
 
-### Phase 2 — Pseudo-label REVIEW (ad_skipper/auto_label_skip_button.py, NEW — OPTIONAL)
-- Labels are ALREADY written by Phase 1 (#5). This script is an OPTIONAL review/refine pass:
-  * regenerate/repair YOLO txt from raw_boxes json (e.g. re-pad bbox, fix class id) if needed.
-  * draw bbox overlays for visual QA; export to X-AnyLabeling for manual correction of mislabeled frames.
-- ad_skipper/ad_classes.txt = single line: skip_ad_button.
+## 3. Existing pipeline (reference — already coded)
+Concise, factual summary. For run commands see `PHASES_GUIDE.md`.
 
-### Phase 3 — Dataset prep (ad_skipper/prepare_ad_dataset.py, NEW)
-- Parametrized copy of auto_prepare_dataset.py logic (avoid touching existing-behavior script), pointed at ad_skipper/dataset.
-- GROUP-AWARE split (KEY FIX): do NOT random-shuffle individual frames (auto_prepare_dataset.py default) — that leaks near-duplicate ad frames into both train AND val, inflating mAP.
-  * Derive group key per image from filename prefix / raw_ocr json "group" (= <session>_<adIdx>).
-  * Shuffle the LIST OF GROUPS, then assign whole groups to train/val by ratio (train ~0.8). Every frame of an ad instance lands entirely in one split.
-  * Negative/background frames grouped too (e.g. by session+segment) so they don't leak either.
-  * Optional: target split ratio by group count, with a tolerance so frame counts stay roughly 80/20.
-- Output ad_skipper/dataset/yolo/{train,val}/{images,labels} + data.yaml (nc=1, names=[skip_ad_button]).
-- Log group/frame counts per split; assert no group_id appears in both train and val.
+- Phase 1 `collect_ad_frames.py` (Selenium-driven harvester):
+  headed Chrome (selenium 4 + webdriver-manager); detects ad via
+  `#movie_player` class `ad-showing`/`ad-interrupting` or `getAdState()===1`;
+  confirms skip button via `SKIP_BUTTON_SELECTORS`; grabs real desktop with `mss`;
+  writes YOLO label directly from the skip button's `element.rect`; collects
+  negatives/hard-negatives (`--neg-ratio`); group key `<session>_<adIdx>` to prevent
+  split leakage; below-normal priority + phash dedup for low CPU / non-intrusive.
+- Phase 2 `auto_label_skip_button.py` (OPTIONAL): regenerate/QA labels from `raw_boxes/`.
+- Phase 3 `prepare_ad_dataset.py`: GROUP-AWARE train/val split (whole `<session>_<adIdx>`
+  groups assigned to one split, never both) → `dataset/yolo/...` + `data.yaml`.
+- Phase 4 `export_for_colab.py` + `Train_Skip_Ad_Colab.ipynb`: zip dataset with a
+  Colab-relative `data.yaml`; train YOLO11n on Colab GPU; bring back `best.pt` as
+  `models/skip_ad_yolo.pt`. Local fallback: `train_skip_model.py`.
+- Phase 5 `youtube_ad_skipper.py`: load model; `mss` loop (same capture as training);
+  cursor-preserving click; stability gate (≥2 consistent frames) + cooldown; `--dry-run`.
 
-### Phase 4 — Train on GOOGLE COLAB (non-local)
-Packaging (local): ad_skipper/export_for_colab.py zips dataset/yolo/{train,val} + a Colab-relative data.yaml (path: /content/ad_skipper_dataset) -> ad_skipper/ad_skipper_dataset.zip.
-Colab: ad_skipper/Train_Skip_Ad_Colab.ipynb (Runtime=GPU):
-  1. !nvidia-smi (verify GPU)
-  2. pip install ultralytics; ultralytics.checks()
-  3. upload ad_skipper_dataset.zip (files.upload) OR mount Drive; unzip to /content/ad_skipper_dataset
-  4. YOLO('yolo11n.pt').train(data='/content/ad_skipper_dataset/data.yaml', epochs=100, imgsz=640, batch=16)
-  5. model.val() -> report mAP50 / mAP50-95
-  6. download best.pt as skip_ad_yolo.pt -> place in ad_skipper/models/ locally for Phase 5
-Fallback: ad_skipper/train_skip_model.py for local GPU runs (same hyperparams).
+## 4. ACTIVE TASK — collect blocking popups as class 1 (`popup_dismiss_button`)
 
-### Phase 5 — Inference + click (ad_skipper/youtube_ad_skipper.py, NEW)
-- load YOLO("ad_skipper/models/skip_ad_yolo.pt"); mss capture loop via SHARED helper (#12) so it matches training capture.
-- results = model.predict(frame, conf=...); map detected box (image device-px) -> screen click point (center, account for monitor offset + DPR via shared helper).
-- CURSOR-PRESERVING CLICK (#3): do NOT warp the user's mouse. Save current cursor pos, click target via Win32 SendInput / pydirectinput, then restore cursor. Honors the non-interference constraint at RUNTIME too.
-- STABILITY GATE: only click when a skip_ad_button box is detected on >=2 consecutive frames at a consistent location (avoid single-frame false positives).
-- cooldown ~2s debounce; verify ad-gone before re-arming; clean Ctrl+C guard.
-- argparse: --model --monitor --interval --conf --dry-run.
+Goal: besides the skip button (class 0), also collect the DISMISS button of YouTube
+blocking popups as YOLO samples under NEW class 1 (with bbox). Scope: YouTube Music
+promo + Cookie/consent + login/Premium modals.
 
-## Files (ALL new generated files under ad_skipper/ — keep repo root clean)
-Container: ad_skipper/
-- ad_skipper/_capture.py  (#12 SHARED helper: mss grab + element.rect->screen-px mapping + cursor-preserving click; used by collect & skipper)
-- ad_skipper/collect_ad_frames.py
-- ad_skipper/auto_label_skip_button.py  (OPTIONAL review/refine — labels already written by Phase 1)
-- ad_skipper/prepare_ad_dataset.py
-- ad_skipper/export_for_colab.py  (zip dataset + Colab data.yaml for non-local training)
-- ad_skipper/Train_Skip_Ad_Colab.ipynb  (Colab GPU training notebook — primary Phase 4)
-- ad_skipper/train_skip_model.py  (optional LOCAL fallback trainer)
-- ad_skipper/youtube_ad_skipper.py
-- ad_skipper/ad_classes.txt (skip_ad_button)
-- ad_skipper/dataset/ (images/, labels/, raw_boxes/, yolo/{train,val}/{images,labels} + data.yaml)
-- ad_skipper/models/skip_ad_yolo.pt (trained best.pt copied here)
-- ad_skipper/runs/ (ultralytics training output, gitignore)
-- MODIFY (repo root) requirements.txt + pyproject.toml: add ultralytics, pyautogui (or pydirectinput for cursor-preserving click), selenium, webdriver-manager (easyocr, mss, opencv, imagehash, playwright already present; easyocr now optional)
-- Add ad_skipper/runs/ and large artifacts to .gitignore
-- REUSE: screen_event_recorder.py (mss pattern), easyocr_checker.py (reader config), auto_prepare_dataset.py (split logic), Train_YOLO_Models.ipynb (ultralytics ref)
-- All scripts use paths relative to ad_skipper/ (Path(__file__).parent) so they run from anywhere.
+### Locked decisions (from user)
+- Collect popups as data samples (not merely dismiss them).
+- New class 1 `popup_dismiss_button`, with bbox; class 0 behavior unchanged.
+- Defaults: `--collect-popups` ON, `--dismiss-popups` ON, `--frames-per-popup` = 3.
+- Do NOT also save popups as skip-class negatives (keep it to class 1 only).
 
-## Verification
-- py_compile each new script
-- Phase1 smoke: run collect on a live ad, confirm frames + YOLO label .txt written directly & deduped; --draw overlay aligns; confirm neg-ratio of empty-label frames; layout variation observed when --vary-layout
-- Phase2 (optional): review overlays; spot-fix mislabels
-- Phase3: confirm data.yaml nc=1, train/val split populated; assert ZERO group overlap between train and val (no <session>_<adIdx> in both)
-- Phase4 (Colab): export_for_colab.py produces zip with images+labels+Colab data.yaml; notebook trains on GPU, model.val() reports mAP, best.pt downloaded as skip_ad_yolo.pt
-- Phase5: --dry-run logs detections + coords; live test skips an ad once w/ cooldown
+### Implementation steps
+1. `ad_classes.txt`: append 2nd line `popup_dismiss_button` (⇒ nc=2 auto; prep/export unchanged).
+2. `collect_ad_frames.py`:
+   a. Add `POPUP_DISMISS_SELECTORS` (e.g. `yt-mealbar-promo-renderer #dismiss-button`,
+      `tp-yt-paper-dialog` buttons, `ytd-popup-container #dismiss-button`, consent-form
+      buttons) + `POPUP_DISMISS_TEXTS` (不用了 / No thanks / 拒絕全部 / Reject all).
+   b. Add `_POPUP_STATE_JS`: scan document for the first VISIBLE dismiss button by selector
+      OR button innerText; return `{present, rect, kind, toolbar, dpr}`. Add `_POPUP_CLICK_JS`
+      to click that same button.
+   c. `_save_frame()`: add `class_id: int = 0`; write `{class_id} cx cy w h`; record
+      `class_id` in `raw_boxes` json. (Reuse `viewport_rect_to_image_bbox`; `_capture.py` unchanged.)
+   d. Add `_maybe_collect_popup()`: grab frame → map rect→bbox → phash dedup → save class 1
+      (group `<session>-popup-<hash>`, capped by `--frames-per-popup`) → if `--dismiss-popups`,
+      click to unblock via `_dismiss_popup()` (`_POPUP_CLICK_JS`).
+   e. Call `_maybe_collect_popup()` once after search navigation in `_resolve_video_urls`,
+      and every iteration of the per-video watch loop. Count into `saved`; track `saved_popup`
+      and include it in the final "Done" line.
+   f. CLI: `--collect-popups` (default ON, `BooleanOptionalAction`),
+      `--frames-per-popup` (default 3), `--dismiss-popups` (default ON).
+   g. Add `[collect]` / `[popup]` verbose status logs.
+3. `PHASES_GUIDE.md`: document class 1, the 3 new flags, outputs, acceptance (Phase 4+ = 2 classes).
 
-## Branching
-- feature/20260626-yolo-ad-skipper (Git Bash) before edits.
+### Verification
+- `py_compile` `collect_ad_frames.py` AND `screen_event_recorder.py` (workspace baseline).
+- `collect_ad_frames.py -h` shows `--collect-popups` / `--frames-per-popup` / `--dismiss-popups`.
+- Headed live test (a profile that triggers the YouTube Music promo): produces
+  `<session>-popup-*` image + label `1 cx cy w h` (all 0..1); `--draw` overlay boxes the
+  dismiss button; clean exit, no lingering chrome.
+- After `prepare_ad_dataset.py`: `data.yaml` shows `nc: 2` and both names.
 
-## Open considerations
-- Runtime scope (RESOLVED): YOLO required at runtime — detection runs on the user's normal browser/desktop, not via Selenium. Selenium is harvest-only. This justifies Phases 2-5 and the on-screen detect+click loop. Domain-match (#2) and identical shared-capture (#12) between harvest and runtime are therefore critical.
-- Split leakage (ADDRESSED): near-duplicate multi-frames per ad must not span train+val; solved via group-aware split keyed by <session>_<adIdx>. Without this, validation mAP is overstated and unreliable.
-- Skip-button selector drift: YouTube renames classes periodically; use a configurable selector list with current candidates as defaults, validated on first run.
-- Coordinate mapping risk: display scaling / multi-monitor can offset bbox; mitigate with --draw verify step + CDP fallback.
-- Class circularity / precision: need NEGATIVE (non-ad) frames in dataset for false-positive control; optional manual review pass.
-- Unskippable / no-ad sessions: only frames with a real skip button get positive labels; harvesting loops videos until --max-frames target reached.
+### Risks / mitigations (popup-specific)
+- Selector drift: dual match (selector + visible text) to survive YouTube renames.
+- Mapping: popup rect is page-level (not player); use the same window_rect+toolbar+dpr
+  mapping; verify with `--draw`.
+- Dedup: popups are mostly static → phash dedup + per-popup cap avoid near-duplicate floods.
+
+## 5. Conventions & constraints
+- Branch policy: never edit on `main`; work on a `feature/YYYYMMDD-...` branch; no auto-merge.
+- Dataset isolation: keep root `./A`, `./labels`, `classes.txt` clean; all new artifacts under `ad_skipper/`.
+- Group-aware split is mandatory (near-duplicate frames must not span train+val).
+- Harvest must stay non-intrusive (own Chrome window, below-normal priority, no global input).
+- Train/inference must share the SAME capture path (`_capture.py`) so domains match.
+
+## 6. Open risks (whole project)
+- Skip-button selector drift → configurable selector list, validated on first run.
+- Coordinate mapping under display scaling / multi-monitor → `--draw` verify + CDP fallback.
+- False clicks → require negatives/hard-negatives + runtime stability gate.
+- No-ad sessions yield no positives → loop videos until `--max-frames` reached.
