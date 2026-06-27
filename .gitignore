@@ -40,3 +40,13 @@ X-AnyLabeling-v4.0.0-beta.2-CPU.exe
 class_mapping_reference.md
 # Wordlists (large files, not tracked)
 tools/wordlists/
+
+# ad_skipper generated artifacts
+ad_skipper/runs/
+ad_skipper/models/*.pt
+ad_skipper/dataset/images/
+ad_skipper/dataset/labels/
+ad_skipper/dataset/raw_boxes/
+ad_skipper/dataset/yolo/
+ad_skipper/ad_skipper_dataset.zip
+ad_skipper/chrome_profile/
