@@ -89,6 +89,7 @@ R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
 | `--vary-layout` | off | 隨機視窗大小/位置，增加資料多樣性 |
 | `--headless` | off | 無頭模式（廣告較少，**不建議用於收集**） |
 | `--draw` | off | 另存 bbox 疊圖供人工檢視 |
+| `--quiet` | off | 關閉狀態輸出（**預設為 verbose**，會持續印出 `[collect]` 目前狀態） |
 | `--session-id` | 時間戳 | 分組鍵（group key），避免 train/val 洩漏 |
 
 ### 產出

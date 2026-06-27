@@ -45,6 +45,16 @@ LABELS_DIR = DATASET_DIR / "labels"
 RAW_BOXES_DIR = DATASET_DIR / "raw_boxes"
 DEBUG_DIR = DATASET_DIR / "debug"
 
+# Verbose status output is ON by default; pass --quiet to silence it.
+_VERBOSE = True
+
+
+def _log(msg: str) -> None:
+    """Print a status line to stderr when verbose mode is on (the default)."""
+    if _VERBOSE:
+        print(f"[collect] {msg}", file=sys.stderr, flush=True)
+
+
 # Configurable selector candidates (YouTube renames these periodically).
 SKIP_BUTTON_SELECTORS = (
     ".ytp-ad-skip-button-modern",
@@ -126,12 +136,14 @@ def _build_driver(profile: Optional[str], profile_directory: Optional[str], head
 
 def _resolve_video_urls(driver, urls: List[str], query: Optional[str], limit: int) -> List[str]:
     if urls:
+        _log(f"using {len(urls)} explicit URL(s)")
         return urls
     if not query:
         raise ValueError("Provide --urls or --query")
 
     from urllib.parse import quote_plus
 
+    _log(f"resolving videos from query {query!r} (limit={limit}) ...")
     driver.get(f"https://www.youtube.com/results?search_query={quote_plus(query)}")
     time.sleep(3.0)
     ids = driver.execute_script(
@@ -145,7 +157,9 @@ def _resolve_video_urls(driver, urls: List[str], query: Optional[str], limit: in
         return out;
         """
     )
-    return [f"https://www.youtube.com/watch?v={vid}" for vid in ids[:limit]]
+    resolved = [f"https://www.youtube.com/watch?v={vid}" for vid in ids[:limit]]
+    _log(f"resolved {len(resolved)} video(s) from query")
+    return resolved
 
 
 def _apply_layout(driver, vary: bool) -> None:
@@ -220,7 +234,12 @@ def harvest(args: argparse.Namespace) -> int:
     capture = ScreenCapture(monitor_index=args.monitor)
     mon_left, mon_top = capture.monitor_offset()
 
+    _log(
+        f"launching Chrome (profile={args.profile or 'temporary'}, "
+        f"profile-directory={args.profile_directory}, headless={args.headless})"
+    )
     driver = _build_driver(args.profile, args.profile_directory, args.headless)
+    _log("Chrome launched; resolving video sources ...")
     saved = 0
     saved_pos = 0
     saved_neg = 0
@@ -238,7 +257,8 @@ def harvest(args: argparse.Namespace) -> int:
             print("No videos resolved.", file=sys.stderr)
             return 2
 
-        for url in urls:
+        total = len(urls)
+        for vi, url in enumerate(urls, 1):
             if saved >= args.max_frames:
                 break
             _apply_layout(driver, args.vary_layout)
@@ -247,11 +267,14 @@ def harvest(args: argparse.Namespace) -> int:
             except Exception as exc:  # noqa: BLE001
                 print(f"skip {url}: {exc}", file=sys.stderr)
                 continue
+            _log(f"video {vi}/{total}: {url}")
             time.sleep(2.5)
 
             frames_this_ad = 0
             ad_group = f"{args.session_id}-{uuid.uuid4().hex[:6]}"
             video_deadline = time.monotonic() + args.per_video_seconds
+            last_status = 0.0
+            last_ad_showing: Optional[bool] = None
 
             while time.monotonic() < video_deadline and saved < args.max_frames:
                 try:
@@ -259,12 +282,32 @@ def harvest(args: argparse.Namespace) -> int:
                 except Exception:
                     state = None
 
+                now = time.monotonic()
                 if not state or not state.get("ready"):
+                    if now - last_status >= 5.0:
+                        _log(f"status: video {vi}/{total} | player not ready yet")
+                        last_status = now
                     time.sleep(args.poll_interval)
                     continue
 
                 ad_showing = state.get("adShowing")
                 skip_rect = state.get("skip")
+
+                if ad_showing != last_ad_showing:
+                    if ad_showing:
+                        _log(f"ad showing (skip button ready={bool(skip_rect)})")
+                    else:
+                        _log("content playing (no ad)")
+                    last_ad_showing = ad_showing
+                if now - last_status >= 5.0:
+                    remaining = max(0.0, video_deadline - now)
+                    _log(
+                        f"status: video {vi}/{total} | "
+                        f"ad={'yes' if ad_showing else 'no'} | "
+                        f"saved={saved} (pos={saved_pos}, neg={saved_neg}) | "
+                        f"time_left={remaining:.0f}s"
+                    )
+                    last_status = now
 
                 if ad_showing and skip_rect:
                     frame = capture.grab()
@@ -287,8 +330,13 @@ def harvest(args: argparse.Namespace) -> int:
                     saved += 1
                     saved_pos += 1
                     frames_this_ad += 1
+                    _log(
+                        f"saved positive frame (saved={saved}, "
+                        f"pos={saved_pos}, neg={saved_neg})"
+                    )
                     if frames_this_ad >= args.frames_per_ad:
                         # Skip the ad to move on and find a different one.
+                        _log("enough frames for this ad; clicking skip")
                         _click_skip(driver)
                         time.sleep(1.0)
                         frames_this_ad = 0
@@ -305,6 +353,10 @@ def harvest(args: argparse.Namespace) -> int:
                     _save_frame(frame, neg_group, 0, None, None, args.draw)
                     saved += 1
                     saved_neg += 1
+                    _log(
+                        f"saved negative frame (saved={saved}, "
+                        f"pos={saved_pos}, neg={saved_neg})"
+                    )
 
                 time.sleep(args.poll_interval)
 
@@ -353,15 +405,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vary-layout", action="store_true", help="Randomize window size/position (#2)")
     p.add_argument("--headless", action="store_true", help="Run Chrome headless (fewer ads)")
     p.add_argument("--draw", action="store_true", help="Save bbox-overlay debug images")
+    p.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Silence verbose status output (verbose is on by default)",
+    )
     p.add_argument("--session-id", default=time.strftime("%Y%m%d-%H%M%S"), help="Group-key session id")
     return p
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    global _VERBOSE
+    _VERBOSE = not args.quiet
     if not 0.0 <= args.neg_ratio <= 1.0:
         print("--neg-ratio must be in [0, 1]", file=sys.stderr)
         return 2
+    _log(
+        f"starting harvester | source={'urls' if args.urls else 'query'} | "
+        f"max_frames={args.max_frames} | neg_ratio={args.neg_ratio} | "
+        f"frames_per_ad={args.frames_per_ad}"
+    )
     try:
         return harvest(args)
     except KeyboardInterrupt:
