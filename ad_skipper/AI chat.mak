@@ -23,7 +23,13 @@ auto-label → train on Google Colab → local inference + click.
 ### IN PROGRESS — the ONLY task on the current branch
 - Branch: `feature/20260627-collect-popup-class`.
 - Add class 1 `popup_dismiss_button`: also collect YouTube blocking-popup dismiss
-  buttons as YOLO samples. Full spec in §4. (Not yet started in code.)
+  buttons as YOLO samples. Full spec in §4.
+- CODE DONE (not yet committed/merged): `ad_classes.txt` now has 2 lines (nc=2 auto);
+  `collect_ad_frames.py` has `POPUP_DISMISS_SELECTORS/TEXTS`, `_POPUP_STATE_JS`/`_POPUP_CLICK_JS`,
+  parametrized `_save_frame(class_id=...)`, `_maybe_collect_popup()`/`_dismiss_popup()`,
+  flags `--collect-popups`/`--frames-per-popup`/`--dismiss-popups`; `PHASES_GUIDE.md` updated.
+  Verified: py_compile OK, `-h` lists the 3 flags, `_load_classes()` → 2 classes.
+  Still pending: headed live test on a popup-triggering profile.
 
 ## 2. Ground-truth facts (verify before relying on them)
 - Class source of truth: `ad_classes.txt`. `prepare_ad_dataset.py` and

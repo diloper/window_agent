@@ -18,6 +18,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -90,6 +91,92 @@ return {
     toolbar: window.outerHeight - window.innerHeight,
     dpr: window.devicePixelRatio || 1,
 };
+"""
+
+# Candidate CSS selectors for the dismiss/close button of YouTube blocking popups
+# (YouTube Music promo mealbar, consent/cookie dialogs, login/Premium modals).
+POPUP_DISMISS_SELECTORS = (
+    "yt-mealbar-promo-renderer #dismiss-button",
+    "yt-mealbar-promo-renderer #dismiss-button button",
+    "ytd-popup-container #dismiss-button",
+    "tp-yt-paper-dialog #dismiss-button",
+    "tp-yt-paper-dialog ytd-button-renderer",
+    "ytd-consent-bump-v2-lightbox button",
+)
+
+# Visible button labels that dismiss a blocking popup (selector-independent fallback).
+POPUP_DISMISS_TEXTS = (
+    "\u4e0d\u7528\u4e86",  # 不用了
+    "no thanks",
+    "\u62d2\u7d55\u5168\u90e8",  # 拒絕全部
+    "reject all",
+)
+
+# JS snippet: find the first VISIBLE popup dismiss button by selector OR button text.
+# Returns {present, rect, kind, toolbar, dpr}. Popups live outside #movie_player.
+_POPUP_STATE_JS = """
+const selectors = arguments[0];
+const texts = (arguments[1] || []).map(t => t.toLowerCase());
+function visible(el) {
+    if (!el || el.offsetParent === null) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    const s = window.getComputedStyle(el);
+    if (s.visibility === 'hidden' || s.display === 'none' || parseFloat(s.opacity) === 0) return false;
+    return true;
+}
+let found = null, kind = null;
+for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (visible(el)) { found = el; kind = 'selector'; break; }
+}
+if (!found && texts.length) {
+    const cands = document.querySelectorAll(
+        'button, tp-yt-paper-button, yt-button-shape button, a[role=\"button\"], ytd-button-renderer');
+    for (const el of cands) {
+        const label = (el.innerText || el.textContent || '').trim().toLowerCase();
+        if (!label) continue;
+        if (texts.some(t => label === t || label.includes(t)) && visible(el)) {
+            found = el; kind = 'text'; break;
+        }
+    }
+}
+if (!found) return {present: false};
+const r = found.getBoundingClientRect();
+return {
+    present: true,
+    rect: {x: r.x, y: r.y, width: r.width, height: r.height},
+    kind: kind,
+    toolbar: window.outerHeight - window.innerHeight,
+    dpr: window.devicePixelRatio || 1,
+};
+"""
+
+# JS snippet: click the same dismiss button (selector OR text). Returns true if clicked.
+_POPUP_CLICK_JS = """
+const selectors = arguments[0];
+const texts = (arguments[1] || []).map(t => t.toLowerCase());
+function visible(el) {
+    if (!el || el.offsetParent === null) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+}
+for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (visible(el)) { el.click(); return true; }
+}
+if (texts.length) {
+    const cands = document.querySelectorAll(
+        'button, tp-yt-paper-button, yt-button-shape button, a[role=\"button\"], ytd-button-renderer');
+    for (const el of cands) {
+        const label = (el.innerText || el.textContent || '').trim().toLowerCase();
+        if (!label) continue;
+        if (texts.some(t => label === t || label.includes(t)) && visible(el)) {
+            el.click(); return true;
+        }
+    }
+}
+return false;
 """
 
 
@@ -181,6 +268,7 @@ def _save_frame(
     bbox: Optional[BBox],
     raw_rect: Optional[dict],
     draw: bool,
+    class_id: int = 0,
 ) -> None:
     name = f"{group}_{seq:04d}"
     img_h, img_w = frame.shape[:2]
@@ -189,7 +277,9 @@ def _save_frame(
     label_path = LABELS_DIR / f"{name}.txt"
     if bbox is not None:
         nx, ny, nw, nh = bbox.to_yolo(img_w, img_h)
-        label_path.write_text(f"0 {nx:.6f} {ny:.6f} {nw:.6f} {nh:.6f}\n", encoding="utf-8")
+        label_path.write_text(
+            f"{class_id} {nx:.6f} {ny:.6f} {nw:.6f} {nh:.6f}\n", encoding="utf-8"
+        )
     else:
         # Negative / hard-negative frame: empty label file.
         label_path.write_text("", encoding="utf-8")
@@ -202,6 +292,7 @@ def _save_frame(
                 "image": f"{name}.png",
                 "img_w": img_w,
                 "img_h": img_h,
+                "class_id": class_id,
                 "rect_viewport": raw_rect,
                 "bbox_image_px": None if bbox is None else [bbox.x, bbox.y, bbox.w, bbox.h],
                 "positive": bbox is not None,
@@ -226,6 +317,86 @@ def _phash(frame):
         return None
 
 
+def _dismiss_popup(driver) -> bool:
+    """Click a blocking popup's dismiss button (selector or visible text)."""
+    try:
+        clicked = driver.execute_script(
+            _POPUP_CLICK_JS, list(POPUP_DISMISS_SELECTORS), list(POPUP_DISMISS_TEXTS)
+        )
+        if clicked:
+            _log("[popup] dismissed blocking popup")
+        return bool(clicked)
+    except Exception:
+        return False
+
+
+def _maybe_collect_popup(
+    driver,
+    capture: "ScreenCapture",
+    args: argparse.Namespace,
+    mon_left: int,
+    mon_top: int,
+    seen_hashes: set,
+    popup_counts: dict,
+) -> int:
+    """Detect a YouTube blocking-popup dismiss button, save it as class 1 (with bbox),
+    then optionally click it to unblock. Returns the number of frames saved (0 or 1)."""
+    if not args.collect_popups:
+        return 0
+    try:
+        state = driver.execute_script(
+            _POPUP_STATE_JS, list(POPUP_DISMISS_SELECTORS), list(POPUP_DISMISS_TEXTS)
+        )
+    except Exception:
+        return 0
+    if not state or not state.get("present"):
+        return 0
+    rect = state.get("rect")
+    if not rect:
+        return 0
+
+    # Stable group per popup instance (kind + rounded rect) so frames of the same
+    # popup stay together for group-aware splitting and per-popup capping works.
+    kind = state.get("kind", "popup")
+    sig = (
+        f"{kind}-{round(rect.get('x', 0))}-{round(rect.get('y', 0))}-"
+        f"{round(rect.get('width', 0))}x{round(rect.get('height', 0))}"
+    )
+    gid = hashlib.md5(sig.encode("utf-8")).hexdigest()[:6]
+    group = f"{args.session_id}-popup-{gid}"
+    count = popup_counts.get(group, 0)
+
+    if count >= args.frames_per_popup:
+        if args.dismiss_popups:
+            _dismiss_popup(driver)
+        return 0
+
+    frame = capture.grab()
+    h = _phash(frame)
+    if h is not None and h in seen_hashes:
+        if args.dismiss_popups:
+            _dismiss_popup(driver)
+        return 0
+    if h is not None:
+        seen_hashes.add(h)
+
+    win = driver.get_window_rect()
+    bbox = viewport_rect_to_image_bbox(
+        rect=rect,
+        window_rect=win,
+        toolbar_height=float(state.get("toolbar", 0) or 0),
+        device_pixel_ratio=float(state.get("dpr", 1) or 1),
+        monitor_left=mon_left,
+        monitor_top=mon_top,
+    )
+    _save_frame(frame, group, count, bbox, rect, args.draw, class_id=1)
+    popup_counts[group] = count + 1
+    _log(f"[popup] saved dismiss button (kind={kind}, group={group}, n={count + 1})")
+    if args.dismiss_popups:
+        _dismiss_popup(driver)
+    return 1
+
+
 def harvest(args: argparse.Namespace) -> int:
     for d in (IMAGES_DIR, LABELS_DIR, RAW_BOXES_DIR):
         d.mkdir(parents=True, exist_ok=True)
@@ -243,7 +414,9 @@ def harvest(args: argparse.Namespace) -> int:
     saved = 0
     saved_pos = 0
     saved_neg = 0
+    saved_popup = 0
     seen_hashes: set = set()
+    popup_counts: dict = {}
 
     def want_negative() -> bool:
         total = saved_pos + saved_neg
@@ -256,6 +429,13 @@ def harvest(args: argparse.Namespace) -> int:
         if not urls:
             print("No videos resolved.", file=sys.stderr)
             return 2
+
+        # Consent / cookie / promo popups usually appear at the first navigation
+        # (search results page) -> collect the dismiss button here too.
+        saved_popup += _maybe_collect_popup(
+            driver, capture, args, mon_left, mon_top, seen_hashes, popup_counts
+        )
+        saved = saved_pos + saved_neg + saved_popup
 
         total = len(urls)
         for vi, url in enumerate(urls, 1):
@@ -277,6 +457,13 @@ def harvest(args: argparse.Namespace) -> int:
             last_ad_showing: Optional[bool] = None
 
             while time.monotonic() < video_deadline and saved < args.max_frames:
+                pc = _maybe_collect_popup(
+                    driver, capture, args, mon_left, mon_top, seen_hashes, popup_counts
+                )
+                if pc:
+                    saved += pc
+                    saved_popup += pc
+
                 try:
                     state = driver.execute_script(_PLAYER_STATE_JS, list(SKIP_BUTTON_SELECTORS))
                 except Exception:
@@ -361,7 +548,8 @@ def harvest(args: argparse.Namespace) -> int:
                 time.sleep(args.poll_interval)
 
         print(
-            f"Done. saved={saved} (positive={saved_pos}, negative={saved_neg}) -> {IMAGES_DIR}"
+            f"Done. saved={saved} (positive={saved_pos}, negative={saved_neg}, "
+            f"popup={saved_popup}) -> {IMAGES_DIR}"
         )
         return 0
     finally:
@@ -405,6 +593,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vary-layout", action="store_true", help="Randomize window size/position (#2)")
     p.add_argument("--headless", action="store_true", help="Run Chrome headless (fewer ads)")
     p.add_argument("--draw", action="store_true", help="Save bbox-overlay debug images")
+    p.add_argument(
+        "--collect-popups",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Collect YouTube blocking-popup dismiss buttons as class 1 (default on)",
+    )
+    p.add_argument(
+        "--frames-per-popup",
+        type=int,
+        default=3,
+        help="Frames to grab per popup instance",
+    )
+    p.add_argument(
+        "--dismiss-popups",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Click the dismiss button to unblock after capturing (default on)",
+    )
     p.add_argument(
         "--quiet",
         action="store_true",
