@@ -129,3 +129,65 @@ Container: ad_skipper/
 - Coordinate mapping risk: display scaling / multi-monitor can offset bbox; mitigate with --draw verify step + CDP fallback.
 - Class circularity / precision: need NEGATIVE (non-ad) frames in dataset for false-positive control; optional manual review pass.
 - Unskippable / no-ad sessions: only frames with a real skip button get positive labels; harvesting loops videos until --max-frames target reached.
+
+---
+
+## Extension: collect blocking POPUPS as a 2nd class (popup_dismiss_button = class 1)
+
+Task: 在收集 skip 廣告按鈕(class 0)之外, 也把 YouTube 阻擋性彈窗的「關閉鈕」
+收集成 YOLO 樣本, 新類別 popup_dismiss_button (class 1, 帶 bbox).
+涵蓋: YouTube Music 推廣 / Cookie 同意(consent) / 登入 or Premium 彈窗.
+
+### Decisions (from user)
+- Intent: 把這類彈窗畫面「收集」成資料樣本 (不是只關掉).
+- Label: 新增 class 1 = popup_dismiss_button, 帶 bbox (class 0 行為不變).
+- Scope: YouTube Music promo + Cookie/consent + login/Premium modals.
+- Defaults: --collect-popups 與 --dismiss-popups 皆預設 ON; --frames-per-popup 預設 3.
+- 不把彈窗另存為 skip-class 負樣本 (保持單純, 只進 class 1).
+- Branch: feature/20260627-collect-popup-class (從最新 main 分出).
+
+### Why nc auto-becomes 2 (no change to prep/export)
+- ad_classes.txt 是唯一 class 來源; prepare_ad_dataset.py 與 export_for_colab.py
+  以 _load_classes() 讀它 -> 自動寫 data.yaml 的 nc / names.
+- 追加第二行 popup_dismiss_button => nc=2, names=[skip_ad_button, popup_dismiss_button]
+  自動成立, 兩支腳本不需改.
+
+### Implementation steps
+1. ad_classes.txt: 追加第二行 `popup_dismiss_button` (class index 1).
+2. collect_ad_frames.py:
+   a. 新增 POPUP_DISMISS_SELECTORS (yt-mealbar-promo-renderer #dismiss-button,
+      tp-yt-paper-dialog 按鈕, ytd-popup-container #dismiss-button, consent 表單鈕…)
+      + 文字候選 POPUP_DISMISS_TEXTS (不用了 / No thanks / 拒絕全部 / Reject all).
+   b. 新增 _POPUP_STATE_JS: 掃描文件, 依 selector 或按鈕 innerText 找第一個「可見」
+      關閉鈕, 回傳 {present, rect, kind, toolbar, dpr}; 另加 _POPUP_CLICK_JS 點擊同一鈕.
+   c. _save_frame(): 增加 class_id:int=0 參數, label 寫成 `{class_id} cx cy w h`,
+      raw_boxes json 加記 class_id (沿用 viewport_rect_to_image_bbox, _capture.py 不動).
+   d. 新增 _maybe_collect_popup(): 擷圖 -> 映射 rect 為 bbox -> phash 去重 -> 存 class 1
+      (group `<session>-popup-<hash>`, 每彈窗上限 --frames-per-popup) -> 若 --dismiss-popups
+      則點擊關閉以解除阻擋; _dismiss_popup() 用 _POPUP_CLICK_JS.
+   e. 在 harvest() 解析搜尋頁後呼叫一次 (consent 牆常於首次導覽出現), 並在每支影片的
+      觀看輪詢迴圈內每次呼叫; 彈窗計入 saved, 另以 saved_popup 統計並更新 Done 輸出.
+   f. CLI: --collect-popups (預設 ON, BooleanOptionalAction),
+      --frames-per-popup (預設 3), --dismiss-popups (預設 ON).
+   g. 加 [collect] / [popup] verbose 狀態輸出.
+3. PHASES_GUIDE.md: 補 class 1 說明 / 三個新參數 / 產出 / 驗收 (Phase 4 起為 2 類).
+
+### Key files (current state)
+- ad_classes.txt: 單行 skip_ad_button -> 追加第二行即得 nc=2.
+- collect_ad_frames.py: _save_frame 目前硬寫 class 0 -> 參數化; _PLAYER_STATE_JS 只回 player
+  skip rect -> 另加 page-level 彈窗 JS; harvest 觀看迴圈輪詢 player 狀態, consent 於首次導覽出現.
+- _capture.py: viewport_rect_to_image_bbox / BBox.to_yolo 重用 (彈窗為 page-level rect 亦適用), 不改.
+- prepare_ad_dataset.py / export_for_colab.py: 由 ad_classes.txt 自動推導 nc/names, 不改.
+
+### Verification
+- py_compile collect_ad_frames.py + screen_event_recorder.py (基線).
+- -h 顯示 --collect-popups / --frames-per-popup / --dismiss-popups.
+- 有頭實測 (會觸發 YouTube Music 推廣的 profile): 產生 `<session>-popup-*` 影像與標註
+  `1 cx cy w h` (皆 0..1), --draw 疊圖框住關閉鈕; 乾淨結束, 無殘留 chrome.
+- prepare_ad_dataset.py 後 data.yaml 顯示 nc:2, names 含兩類.
+
+### Open considerations
+- selector 漂移: 用可設定的 selector + 文字雙重比對, 降低 YouTube 改名風險.
+- 座標映射: 彈窗為 page-level (非 player) rect, 仍用同一 window_rect+toolbar+dpr 映射;
+  以 --draw 疊圖驗證對齊.
+- 去重: 彈窗多為靜態畫面, phash 去重避免大量近重複; 每彈窗上限 --frames-per-popup.
