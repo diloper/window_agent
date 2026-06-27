@@ -27,7 +27,7 @@
 ```powershell
 Set-Location R:\SAM
 R:\SAM\.venv\Scripts\python.exe ad_skipper\collect_ad_frames.py `
-  --query "popular music video 2024" `
+  --query "popular music video " `
   --url-limit 15 `
   --profile "R:\SAM\ad_skipper\chrome_profile" `
   --max-frames 300 `

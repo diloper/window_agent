@@ -45,6 +45,7 @@ IMAGES_DIR = DATASET_DIR / "images"
 LABELS_DIR = DATASET_DIR / "labels"
 RAW_BOXES_DIR = DATASET_DIR / "raw_boxes"
 DEBUG_DIR = DATASET_DIR / "debug"
+CLASSES_FILE = HERE / "ad_classes.txt"
 
 # Verbose status output is ON by default; pass --quiet to silence it.
 _VERBOSE = True
@@ -54,6 +55,18 @@ def _log(msg: str) -> None:
     """Print a status line to stderr when verbose mode is on (the default)."""
     if _VERBOSE:
         print(f"[collect] {msg}", file=sys.stderr, flush=True)
+
+
+def _load_class_names() -> List[str]:
+    """Read class names (one per line) from ad_classes.txt for verbose reporting."""
+    try:
+        return [
+            ln.strip()
+            for ln in CLASSES_FILE.read_text(encoding="utf-8").splitlines()
+            if ln.strip()
+        ]
+    except Exception:
+        return []
 
 
 # Configurable selector candidates (YouTube renames these periodically).
@@ -417,6 +430,9 @@ def harvest(args: argparse.Namespace) -> int:
     saved_popup = 0
     seen_hashes: set = set()
     popup_counts: dict = {}
+    class_names = _load_class_names()
+    name_skip = class_names[0] if len(class_names) > 0 else "skip_ad_button"
+    name_popup = class_names[1] if len(class_names) > 1 else "popup_dismiss_button"
 
     def want_negative() -> bool:
         total = saved_pos + saved_neg
@@ -491,7 +507,8 @@ def harvest(args: argparse.Namespace) -> int:
                     _log(
                         f"status: video {vi}/{total} | "
                         f"ad={'yes' if ad_showing else 'no'} | "
-                        f"saved={saved} (pos={saved_pos}, neg={saved_neg}) | "
+                        f"saved={saved} ({name_skip}={saved_pos}, "
+                        f"{name_popup}={saved_popup}, neg={saved_neg}) | "
                         f"time_left={remaining:.0f}s"
                     )
                     last_status = now
@@ -547,9 +564,13 @@ def harvest(args: argparse.Namespace) -> int:
 
                 time.sleep(args.poll_interval)
 
+        _log(
+            f"class summary (this session): {name_skip}={saved_pos}, "
+            f"{name_popup}={saved_popup} | negatives(background)={saved_neg}"
+        )
         print(
-            f"Done. saved={saved} (positive={saved_pos}, negative={saved_neg}, "
-            f"popup={saved_popup}) -> {IMAGES_DIR}"
+            f"Done. saved={saved} ({name_skip}={saved_pos}, "
+            f"{name_popup}={saved_popup}, negative={saved_neg}) -> {IMAGES_DIR}"
         )
         return 0
     finally:
