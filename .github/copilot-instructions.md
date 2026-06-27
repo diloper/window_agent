@@ -53,12 +53,19 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - Default to a complete answer with implementation summary and validation, not just the next suggested step.
 - Include the concrete verification command when changes affect runtime behavior.
 
+## Documentation Policy
+- 除非用戶在指令中**明確要求**，否則不得自動建立任何說明文件（包括 `.md` 報告、guide、summary、實作報告、變更紀錄等）。
+- 「明確要求」指用戶訊息出現如「寫文件 / 產生說明 / 寫一份 report / generate doc / 更新 README」等清楚意圖。
+- 預設只在對話中以文字回覆實作摘要與驗證結果，不落地成檔案。
+- 若認為文件有助維護，可口頭建議，但需待用戶同意後才建立。
+
 ## Enforcement Contract
 - Treat this file as the single source of truth for workspace behavior across all models.
 - Non-negotiable rules:
 	- Do not modify code on `main` or `master`; always use `feature/YYYYMMDD-description` style branches.
 	- Run baseline verification after Python-related changes. At minimum, run `python -m py_compile screen_event_recorder.py`.
 	- Do not use destructive git commands (`git reset --hard`, `git checkout --`) unless explicitly requested.
+	- Do not create documentation files (`.md` reports, guides, summaries) unless the user explicitly requests them.
 	- Report which verification command was run and whether it passed.
 - Operational guardrails:
 	- Local hooks run `scripts/policy_check.py` at `pre-commit` and `pre-push`.
