@@ -36,7 +36,7 @@ Provide a one-command interface to execute the full video auto-labeling pipeline
 
 3. **Execute auto_label_from_events.py with standardized parameters**
    ```bash
-   C:\Users\User\miniconda3\python.exe auto_label_from_events.py \
+   .venv\Scripts\python.exe auto_label_from_events.py \
      --events-json <inferred_events_json> \
      --video <video_path> \
      --label-policy serpapi-topk \

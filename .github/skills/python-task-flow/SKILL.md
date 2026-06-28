@@ -40,7 +40,7 @@ Reduce back-and-forth on Python tasks by gathering context first, making the sma
 ## Python-Specific Heuristics
 - Prefer reading the main script and README before proposing dataset or pipeline changes.
 - Follow the current project structure unless the request explicitly asks for a redesign.
-- Reuse existing commands, interpreter paths, and tasks when available.
+- Reuse existing commands and tasks when available; use the canonical interpreter (`.venv\Scripts\python.exe`, per `.vscode/settings.json`) rather than ad-hoc paths.
 - For data pipeline work, verify inputs, outputs, and file naming assumptions.
 
 ## Output Shape

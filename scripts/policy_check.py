@@ -38,8 +38,8 @@ def head_is_merge_commit() -> bool:
     return len(head_with_parents.split()) >= 3
 
 
-def check_branch(stage: str, allow_main: bool) -> list[str]:
-    branch = current_branch()
+def check_branch(stage: str, allow_main: bool, branch_override: str | None = None) -> list[str]:
+    branch = branch_override or current_branch()
     errors: list[str] = []
 
     if branch == "HEAD":
@@ -70,16 +70,29 @@ def check_branch(stage: str, allow_main: bool) -> list[str]:
     return errors
 
 
-def check_py_compile(target_file: Path, stage: str) -> list[str]:
-    if not target_file.exists():
-        return [f"[{stage}] required file not found: {target_file}"]
+def changed_python_files(base: str) -> list[Path]:
+    output = run_git_command(
+        ["diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD"]
+    )
+    return [Path(line) for line in output.splitlines() if line.endswith(".py")]
 
+
+def check_changed_compile(base: str, stage: str, repo_root: Path) -> list[str]:
     try:
-        py_compile.compile(str(target_file), doraise=True)
-    except py_compile.PyCompileError as exc:
-        return [f"[{stage}] py_compile failed for {target_file}: {exc.msg}"]
+        files = changed_python_files(base)
+    except subprocess.CalledProcessError as exc:
+        return [f"[{stage}] failed to diff changed Python files against {base}: {exc.stderr.strip()}"]
 
-    return []
+    errors: list[str] = []
+    for rel in files:
+        target = repo_root / rel
+        if not target.exists():
+            continue
+        try:
+            py_compile.compile(str(target), doraise=True)
+        except py_compile.PyCompileError as exc:
+            errors.append(f"[{stage}] py_compile failed for {rel}: {exc.msg}")
+    return errors
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,6 +107,16 @@ def parse_args() -> argparse.Namespace:
         "--allow-main",
         action="store_true",
         help="Allow running checks on main/master (for special CI contexts)",
+    )
+    parser.add_argument(
+        "--branch",
+        default=None,
+        help="Override the branch name to validate (e.g. PR head_ref under detached HEAD)",
+    )
+    parser.add_argument(
+        "--base",
+        default=None,
+        help="Base ref to diff changed Python files against (default: main)",
     )
     parser.add_argument(
         "--skip-branch-check",
@@ -115,13 +138,13 @@ def main() -> int:
 
     if not args.skip_branch_check:
         try:
-            errors.extend(check_branch(args.stage, args.allow_main))
+            errors.extend(check_branch(args.stage, args.allow_main, args.branch))
         except subprocess.CalledProcessError as exc:
             errors.append(f"[{args.stage}] failed to query git branch: {exc.stderr.strip()}")
 
     if args.stage in {"pre-push", "ci"} and not args.skip_compile_check:
-        target = repo_root / "screen_event_recorder.py"
-        errors.extend(check_py_compile(target, args.stage))
+        base = args.base or "main"
+        errors.extend(check_changed_compile(base, args.stage, repo_root))
 
     if errors:
         print("Policy check failed:", file=sys.stderr)

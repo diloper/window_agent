@@ -23,7 +23,7 @@ Standardize the flow for analyzing image search results from a local image path 
 4. Return top repetition result from visual matches.
 
 ## Standard Command
-C:/Users/User/miniconda3/python.exe google-search-results.py <image_path>
+.venv\Scripts\python.exe google-search-results.py <image_path>
 
 ## Notes
 - image_path is required; no default path is used.
