@@ -86,13 +86,50 @@ const cls = player.classList || {contains: () => false};
 let adState = null;
 try { if (typeof player.getAdState === 'function') adState = player.getAdState(); } catch (e) {}
 const adShowing = cls.contains('ad-showing') || cls.contains('ad-interrupting') || adState === 1;
+
+// Effective opacity = product of the element's and all ancestors' opacity,
+// so a fade-in animation applied to a parent is still detected.
+const MIN_OPACITY = 0.9;
+const EDGE_TOL = 1;  // px tolerance for the "fully inside viewport" check
+function effectiveOpacity(el) {
+    let o = 1;
+    let node = el;
+    while (node && node.nodeType === 1) {
+        const s = window.getComputedStyle(node);
+        if (s.visibility === 'hidden' || s.display === 'none') return 0;
+        const v = parseFloat(s.opacity);
+        if (!isNaN(v)) o *= v;
+        node = node.parentElement;
+    }
+    return o;
+}
+// "Prominent" => fully opaque, fully inside the viewport, and topmost at center.
+function prominence(el, r) {
+    if (effectiveOpacity(el) < MIN_OPACITY) return 'opacity';
+    if (window.getComputedStyle(el).pointerEvents === 'none') return 'opacity';
+    if (r.left < -EDGE_TOL || r.top < -EDGE_TOL ||
+        r.right > window.innerWidth + EDGE_TOL ||
+        r.bottom > window.innerHeight + EDGE_TOL) return 'offscreen';
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const top = document.elementFromPoint(cx, cy);
+    if (!top || (top !== el && !el.contains(top) && !top.contains(el))) return 'occluded';
+    return null;
+}
 let rect = null;
+let skipReason = null;
 for (const sel of selectors) {
     const el = document.querySelector(sel);
     if (el && el.offsetParent !== null) {
         const r = el.getBoundingClientRect();
         if (r.width > 0 && r.height > 0) {
-            rect = {x: r.x, y: r.y, width: r.width, height: r.height};
+            const reason = prominence(el, r);
+            if (reason === null) {
+                rect = {x: r.x, y: r.y, width: r.width, height: r.height};
+                skipReason = null;
+            } else {
+                skipReason = reason;
+            }
             break;
         }
     }
@@ -101,6 +138,7 @@ return {
     ready: true,
     adShowing: !!adShowing,
     skip: rect,
+    skipReason: skipReason,
     toolbar: window.outerHeight - window.innerHeight,
     dpr: window.devicePixelRatio || 1,
 };
@@ -471,6 +509,7 @@ def harvest(args: argparse.Namespace) -> int:
             video_deadline = time.monotonic() + args.per_video_seconds
             last_status = 0.0
             last_ad_showing: Optional[bool] = None
+            last_skip_reason: Optional[str] = None
 
             while time.monotonic() < video_deadline and saved < args.max_frames:
                 pc = _maybe_collect_popup(
@@ -495,6 +534,7 @@ def harvest(args: argparse.Namespace) -> int:
 
                 ad_showing = state.get("adShowing")
                 skip_rect = state.get("skip")
+                skip_reason = state.get("skipReason")
 
                 if ad_showing != last_ad_showing:
                     if ad_showing:
@@ -502,6 +542,15 @@ def harvest(args: argparse.Namespace) -> int:
                     else:
                         _log("content playing (no ad)")
                     last_ad_showing = ad_showing
+
+                # Ad is on but the skip button is not prominent (fading in,
+                # occluded, or off-screen) -> do NOT capture this frame.
+                if ad_showing and not skip_rect and skip_reason:
+                    if skip_reason != last_skip_reason:
+                        _log(f"skip not prominent (reason={skip_reason}); not capturing")
+                        last_skip_reason = skip_reason
+                elif skip_rect:
+                    last_skip_reason = None
                 if now - last_status >= 5.0:
                     remaining = max(0.0, video_deadline - now)
                     _log(
