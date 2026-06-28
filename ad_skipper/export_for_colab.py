@@ -56,7 +56,7 @@ def export(colab_dir: str, output: Path) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
 
     img_count = lbl_count = 0
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_LZMA) as zf:
         for f in files:
             arcname = f.relative_to(YOLO_DIR).as_posix()
             zf.writestr(  # stream to avoid loading huge files at once
