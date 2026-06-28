@@ -35,12 +35,9 @@ Provide a one-command interface to execute the full video auto-labeling pipeline
    - Abort with clear message if not found
 
 3. **Execute auto_label_from_events.py with standardized parameters**
-   ```bash
-   .venv\Scripts\python.exe auto_label_from_events.py \
-     --events-json <inferred_events_json> \
-     --video <video_path> \
-     --label-policy serpapi-topk \
-     [other params use defaults: output-dir auto-derived, window-before-ms=0, window-after-ms=0, topk=3, etc.]
+   ```powershell
+   .venv\Scripts\python.exe auto_label_from_events.py --events-json <inferred_events_json> --video <video_path> --label-policy serpapi-topk
+   # other params use defaults: output-dir auto-derived, window-before-ms=0, window-after-ms=0, topk=3, etc.
    ```
 
 4. **Report results**
