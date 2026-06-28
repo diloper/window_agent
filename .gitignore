@@ -51,3 +51,4 @@ ad_skipper/dataset/yolo/
 ad_skipper/ad_skipper_dataset.zip
 ad_skipper/chrome_profile/
 ad_skipper/*.pt
+ad_skipper/logs/skipper.log
