@@ -84,11 +84,11 @@ powershell -ExecutionPolicy Bypass -File tools/install-hooks.ps1
 ### What Is Enforced / 強制規則
 
 - `pre-commit`: blocks commits on `main`/`master`; branch must start with `feature/`, `hotfix/`, or `bugfix/`.
-- `pre-push`: runs the same branch policy and baseline compile check on `screen_event_recorder.py`.
+- `pre-push`: runs the same branch policy and compiles the Python files changed against `main`.
 - CI (`.github/workflows/policy-check.yml`): validates PR branch naming and runs `scripts/policy_check.py`.
 
 - `pre-commit`：禁止在 `main`/`master` 提交；分支必須以 `feature/`、`hotfix/` 或 `bugfix/` 開頭。
-- `pre-push`：同時檢查分支規範與 `screen_event_recorder.py` 的基礎編譯檢查。
+- `pre-push`：同時檢查分支規範並編譯相對於 `main` 變更的 Python 檔案。
 - CI（`.github/workflows/policy-check.yml`）：檢查 PR 分支命名並執行 `scripts/policy_check.py`。
 
 ### Manual Check / 手動檢查

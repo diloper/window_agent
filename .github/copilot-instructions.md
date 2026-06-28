@@ -1,7 +1,7 @@
 # Project Guidelines
 
 ## Scope
-This workspace is a Python-based YOLO dataset preparation project centered on `auto_prepare_dataset.py`.
+This workspace is a Python-based YOLO dataset preparation and screen-automation project. It contains multiple scripts (dataset preparation, recording, auto-labeling, ad skipping); no single file is the sole core.
 
 ## Working Style
 - For Python requests, inspect the relevant workspace files before asking clarifying questions when the codebase can answer them.
@@ -12,8 +12,10 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 
 
 ### Branching Policy
-- **Before any code modification, you must create and switch to a new branch. Never work directly on the main branch.**
-		- Recommended branch naming: `feature/YYYYMMDD-description` (e.g., feature/20260528-fix-bug)
+- **Never modify code directly on `main` or `master`. Select the working branch based on the current branch:**
+		- If the current branch is already a non-`main`/`master` branch (e.g. an existing `feature/`, `hotfix/`, or `bugfix/` branch), make modifications directly on that existing branch — do NOT create an additional branch.
+		- Only when the current branch is `main` or `master`: create and switch to a new branch before any code modification.
+		- Recommended branch naming: one of the allowed prefixes `feature/`, `hotfix/`, or `bugfix/` followed by `YYYYMMDD-description` (e.g., `feature/20260528-fix-bug`). These three prefixes are the only ones accepted by `scripts/policy_check.py`.
 		- Branch creation commands:
 			```bash
 			git checkout main
@@ -31,7 +33,6 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 	git branch -d <branch>
 	```
 - Only use force delete (`-D`) with explicit user approval.
-- Always use Git Bash for Git commands.
 
 - After code changes, automatically run the relevant test or validation command.
 - If test or runtime errors are caused by the change, fix them and re-run verification before handoff.
@@ -43,8 +44,8 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - This workspace runs on Windows and has a task for dataset verification.
 
 ## Build And Test
-- For generic requests like "功能測試" without a specified target, default to validating `screen_event_recorder.py` first.
-- For `screen_event_recorder.py` validation, prefer `python -m py_compile screen_event_recorder.py` as the baseline check.
+- Canonical Python interpreter: the workspace `.venv` declared in `.vscode/settings.json` (`.venv\Scripts\python.exe`). Terminals auto-activate it, so bare `python` resolves to the `.venv` interpreter.
+- For generic requests like "功能測試" without a specified target, validate the Python files changed by the current work using `python -m py_compile <changed_file.py>`.
 - Prefer the existing `prepare-colab-dataset` task for validating dataset preparation behavior.
 - If a task is not suitable, use `python auto_prepare_dataset.py` from the workspace root.
 - After Python changes, report what was verified and what was not run.
@@ -54,18 +55,38 @@ This workspace is a Python-based YOLO dataset preparation project centered on `a
 - Include the concrete verification command when changes affect runtime behavior.
 
 ## Documentation Policy
-- 除非用戶在指令中**明確要求**，否則不得自動建立任何說明文件（包括 `.md` 報告、guide、summary、實作報告、變更紀錄等）。
-- 「明確要求」指用戶訊息出現如「寫文件 / 產生說明 / 寫一份 report / generate doc / 更新 README」等清楚意圖。
-- 預設只在對話中以文字回覆實作摘要與驗證結果，不落地成檔案。
-- 若認為文件有助維護，可口頭建議，但需待用戶同意後才建立。
+- Do not automatically create any documentation files (including `.md` reports, guides, summaries, implementation reports, change logs, etc.) unless the user **explicitly requests** it in their instruction.
+- "Explicitly requests" means the user's message shows a clear intent such as "write a doc / produce documentation / write a report / generate doc / update README".
+- By default, reply with the implementation summary and verification results as text in the conversation only; do not persist them to files.
+- If you believe a document would help maintenance, you may suggest it verbally, but only create it after the user agrees.
+- **Exception (Sanctioned)**: Progress-tracking files under `docs/progress/` are exempt from this restriction. Per the **Progress Tracking Policy** below, the agent should maintain these files automatically during autopilot implementation (plan mode persists decisions to session memory only). The "no md unless explicitly requested" rule still applies to all other locations.
+
+## Progress Tracking Policy
+- Maintain English-language progress records under `docs/progress/`. Plan mode captures
+  confirmed requirements/decisions in session memory only; the files below are written and
+  updated during autopilot implementation.
+- `docs/progress/INDEX.md` is the single source of truth: one row per feature/topic
+  with Phase, Status, Branch, Last Updated, and a link to its details file.
+- For each feature/topic, copy `docs/progress/_TEMPLATE.md` to `docs/progress/feature-<slug>.md`
+  (lowercase-hyphenated slug matching the INDEX link).
+- Plan mode: persist confirmed requirements and decisions to session memory only
+  (no `docs/progress` writes).
+- Autopilot: create the feature file from `_TEMPLATE.md` and register it in `INDEX.md`,
+  then append Implementation Progress and Verification results to the feature file and
+  update the `INDEX.md` row's Phase / Status / Last Updated as work advances.
+- Consistency: before every handoff, reconcile the feature file and `INDEX.md` against the
+  actual repository state (changed files, commands run, verification outcome).
+- Split rule: keep one file per feature/topic; start a new file for a distinct topic rather
+  than letting a single file grow to cover unrelated work.
+- All progress content must be in English.
 
 ## Enforcement Contract
 - Treat this file as the single source of truth for workspace behavior across all models.
 - Non-negotiable rules:
-	- Do not modify code on `main` or `master`; always use `feature/YYYYMMDD-description` style branches.
-	- Run baseline verification after Python-related changes. At minimum, run `python -m py_compile screen_event_recorder.py`.
-	- Do not use destructive git commands (`git reset --hard`, `git checkout --`) unless explicitly requested.
-	- Do not create documentation files (`.md` reports, guides, summaries) unless the user explicitly requests them.
+		- Do not modify code on `main` or `master`. If the current branch is already a non-`main`/`master` branch, work directly on it; only when on `main`/`master` create a new branch first using one of the allowed prefixes `feature/`, `hotfix/`, or `bugfix/` (e.g. `feature/YYYYMMDD-description`).
+		- Do not use destructive git commands (`git reset --hard`, `git checkout --`) unless explicitly requested. `git reset --mixed`/`--soft` are allowed but use them with caution.
+	- Do not create documentation files (`.md` reports, guides, summaries) unless the user explicitly requests them, **except** progress-tracking files under `docs/progress/`, which the agent maintains automatically per the Progress Tracking Policy.
+		- Maintain `docs/progress/` records (feature files + `INDEX.md`) during autopilot implementation (plan mode persists to session memory), and keep them consistent with the actual repository state before handoff.
 	- Report which verification command was run and whether it passed.
 - Operational guardrails:
 	- Local hooks run `scripts/policy_check.py` at `pre-commit` and `pre-push`.

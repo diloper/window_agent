@@ -13,24 +13,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Validate PR branch naming
+      - name: Run repository policy checks (pull request)
         if: github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          branch="${{ github.head_ref }}"
-          if [[ "$branch" =~ ^(feature|hotfix|bugfix)/ ]]; then
-            echo "PR branch is valid: $branch"
-          else
-            echo "Invalid PR branch: $branch"
-            echo "Use feature/*, hotfix/*, or bugfix/*"
-            exit 1
-          fi
+        run: >-
+          python scripts/policy_check.py --stage ci
+          --branch "${{ github.head_ref }}"
+          --base "origin/${{ github.base_ref }}"
 
-      - name: Run repository policy checks
-        run: python scripts/policy_check.py --stage ci --skip-branch-check
+      - name: Run repository policy checks (push)
+        if: github.event_name != 'pull_request'
+        run: python scripts/policy_check.py --stage ci --skip-branch-check --base HEAD~1
