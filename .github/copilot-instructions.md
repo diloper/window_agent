@@ -50,6 +50,16 @@ This workspace is a Python-based YOLO dataset preparation and screen-automation 
 - If a task is not suitable, use `python auto_prepare_dataset.py` from the workspace root.
 - After Python changes, report what was verified and what was not run.
 
+## Terminal / Shell Conventions
+- This workspace runs on **Windows** with **PowerShell** as the default integrated terminal, as declared in `.vscode/settings.json` (`terminal.integrated.defaultProfile.windows: "PowerShell"`).
+- All terminal commands MUST use PowerShell syntax by default:
+	- Chain commands with `;` (never `&&` or `||`).
+	- Reference environment variables as `$env:NAME` (never `$NAME` or `export NAME=`).
+	- Use PowerShell cmdlets: `Remove-Item`, `Copy-Item`, `New-Item`, `Get-Content`, `Get-ChildItem`, `Test-Path` (avoid `rm`, `cp`, `cat`, `ls`, `touch` as canonical forms).
+	- Avoid bash-only constructs: `2>/dev/null`, backtick line-continuation, heredocs (`<<EOF`), and POSIX globbing semantics.
+- Git Bash is optional and used ONLY when bash-style piping is required (e.g. `grep`/`xargs`); do not assume it as the default shell.
+- The `.venv` auto-activates in new terminals, so bare `python` resolves to `.venv\Scripts\python.exe` — do not prefix commands with an explicit interpreter path unless necessary.
+
 ## Output Expectations
 - Default to a complete answer with implementation summary and validation, not just the next suggested step.
 - Include the concrete verification command when changes affect runtime behavior.
@@ -85,6 +95,7 @@ This workspace is a Python-based YOLO dataset preparation and screen-automation 
 - Non-negotiable rules:
 		- Do not modify code on `main` or `master`. If the current branch is already a non-`main`/`master` branch, work directly on it; only when on `main`/`master` create a new branch first using one of the allowed prefixes `feature/`, `hotfix/`, or `bugfix/` (e.g. `feature/YYYYMMDD-description`).
 		- Do not use destructive git commands (`git reset --hard`, `git checkout --`) unless explicitly requested. `git reset --mixed`/`--soft` are allowed but use them with caution.
+	- Generate all terminal commands using PowerShell syntax per the **Terminal / Shell Conventions** section (`;` chaining, `$env:NAME`, PowerShell cmdlets). Never emit bash-only syntax (`&&`, `||`, `2>/dev/null`, `export`) unless the user explicitly switches to Git Bash. This rule applies uniformly to every model.
 	- Do not create documentation files (`.md` reports, guides, summaries) unless the user explicitly requests them, **except** progress-tracking files under `docs/progress/`, which the agent maintains automatically per the Progress Tracking Policy.
 		- Maintain `docs/progress/` records (feature files + `INDEX.md`) during autopilot implementation (plan mode persists to session memory), and keep them consistent with the actual repository state before handoff.
 	- Report which verification command was run and whether it passed.
