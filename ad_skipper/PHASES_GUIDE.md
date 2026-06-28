@@ -11,6 +11,7 @@
 | Phase 1 | 自動收集廣告影格 + 自動產生 YOLO 標註 | `collect_ad_frames.py` |
 | Phase 4 | 在 Google Colab（GPU）訓練 skip 按鈕模型 | `export_for_colab.py` + `Train_Skip_Ad_Colab.ipynb` |
 | Phase 5 | 載入訓練好的模型，即時偵測並自動點擊「略過廣告」 | `youtube_ad_skipper.py` |
+| Phase 6 | 登入自動啟動 + 僅在 YouTube 影片(非 Shorts)時偵測 | `install_autostart.ps1`、`_active_url.py` |
 
 > Phase 2（標註複查）與 Phase 3（分組切分 train/val）為自動化中介步驟，已驗證可用；
 > 流程：Phase 1 → (Phase 2 選用) → Phase 3 → Phase 4 → Phase 5。
@@ -292,6 +293,104 @@ R:\SAM\.venv\Scripts\python.exe ad_skipper\youtube_ad_skipper.py `
 
 ---
 
+## Phase 6 — 登入自動啟動 + 僅在 YouTube 影片(非 Shorts)時偵測
+
+> 需先有 `ad_skipper/models/skip_ad_yolo.pt`（Phase 4 產出）。
+> 目標：Windows **登入成功後自動檢查 skipper 是否已啟動，若無則背景隱藏啟動**，
+> 並且**只有在前景瀏覽器分頁是 YouTube 影片（`youtube.com/watch`，不含 Shorts）時**才截圖與辨識。
+
+### 觀念：watch vs Shorts 閘門（四層、可退化）
+
+因為本專案是擷取**真實桌面**（非 Selenium 控制的瀏覽器），「取得目前分頁網址」本身是難點，
+故閘門設計成多層、任何一層失效都會往下退，不會整個崩潰：
+
+| 層級 | 判定 | 全螢幕 | 說明 |
+|---|---|---|---|
+| 1 標題前置 | 前景行程為瀏覽器且視窗標題含 `YouTube` | ✅ | 否則直接 `NONE`（停用） |
+| 2 UIA 讀網址 | 用 UI Automation 讀網址列 → `WATCH`/`SHORTS`/`OTHER`，並**快取到該視窗** | ❌（網址列消失） | windowed 時最準 |
+| 3 每視窗快取 | 全螢幕沿用該視窗最後已知分類（標題仍相符） | ✅ | 補第 2 層在全螢幕的盲區 |
+| 4 標題輕量備援 | UIA 讀不到且無快取時：含 `shorts`→`SHORTS`；有真實標題前綴→`WATCH`；裸 `YouTube`→`NONE` | ✅ | best-effort，可用 `--fallback` 覆寫 |
+
+**閘門只在最終分類為 `WATCH` 時開啟**（執行 grab + 偵測）。支援 Chrome / Edge / Firefox
+（Edge 與 Chrome 同為 Chromium；Firefox 若未啟用無障礙(a11y)可能讀不到網址，會自動退第 4 層）。
+
+### 安裝（註冊登入自動啟動）
+
+於一般（免系統管理員）PowerShell 執行一次：
+
+```powershell
+Set-Location R:\SAM
+powershell -ExecutionPolicy Bypass -File ad_skipper\install_autostart.ps1
+```
+
+> 會建立「At log on」工作排程器任務 `SAM YouTube Ad Skipper`，以 `.venv\Scripts\pythonw.exe`
+> （無主控台視窗）背景執行：
+> `youtube_ad_skipper.py --model ...\skip_ad_yolo.pt --monitor 1 --conf 0.9 --only-youtube-watch --single-instance --fallback title --log-file ...\logs\skipper.log`
+
+**不必登出即可測試**：
+
+```powershell
+Start-ScheduledTask -TaskName 'SAM YouTube Ad Skipper'
+Get-Content R:\SAM\ad_skipper\logs\skipper.log -Tail 20 -Wait
+```
+
+**手動啟動（不透過排程，供測試）**：
+
+```powershell
+Set-Location R:\SAM
+powershell -ExecutionPolicy Bypass -File ad_skipper\autostart_skipper.ps1
+```
+
+**解除安裝**：
+
+```powershell
+Set-Location R:\SAM
+powershell -ExecutionPolicy Bypass -File ad_skipper\uninstall_autostart.ps1
+```
+
+### 新增的 runtime 參數（`youtube_ad_skipper.py`）
+
+| 參數 | 預設 | 說明 |
+|---|---|---|
+| `--only-youtube-watch` | off | 啟用四層閘門：僅 YouTube watch 頁才截圖+辨識 |
+| `--url-poll` | 1.0 | 兩次網址閘門檢查的間隔秒數 |
+| `--fallback` | `title` | UIA 讀不到且無快取時的決策：`title`/`none`/`watch` |
+| `--log-file` | 無 | 將 log 寫入檔案（背景隱藏執行必備） |
+| `--single-instance` | off | 偵測到已有實例執行時乾淨退出（exit 0），即「已啟動就不重複啟動」 |
+
+> 單一實例採 Windows 具名互斥量（`Global\SAM_youtube_ad_skipper`）；
+> 登入時排程觸發若已有實例在跑，新觸發會立即 exit 0，不會開出第二份。
+
+### 行為說明
+
+- 閘門每 `--url-poll` 秒檢查一次；非 watch 頁時**完全略過截圖與模型推論**（省 CPU），切回 watch 才恢復。
+- 全螢幕播放時網址列消失，改用「每視窗快取」沿用先前 windowed 模式判定的 watch/shorts；
+  若連快取都沒有，再退「標題輕量備援」。
+- 其餘點擊行為與 Phase 5 相同（穩定幀數門檻、保留游標、`--cooldown`）。
+
+### 驗收標準
+
+- [ ] `install_autostart.ps1` 成功註冊任務；`Get-ScheduledTask 'SAM YouTube Ad Skipper'` 可見。
+- [ ] `Start-ScheduledTask`（或重新登入）後，工作管理員可見一個**隱藏的 `pythonw.exe`**，且 `logs/skipper.log` 出現啟動紀錄。
+- [ ] 連續觸發/手動再啟一次時，第二份因單一實例守門**立即結束**，不出現兩個 skipper。
+- [ ] 在 YouTube **watch 頁**時 log 顯示 `URL gate OPEN`，並可偵測/略過廣告。
+- [ ] 切到 **Shorts** 或非 YouTube 分頁時 log 顯示 `URL gate CLOSED`，不截圖、不誤點。
+- [ ] watch 頁切**全螢幕**後仍維持 `OPEN`（靠每視窗快取）。
+- [ ] `uninstall_autostart.ps1` 可移除任務。
+- [ ] 單獨執行 `python ad_skipper\_active_url.py` 時，三瀏覽器在 watch/shorts/一般頁分別輸出 `WATCH`/`SHORTS`/`OTHER`。
+
+### 單獨驗證閘門（不啟動模型）
+
+```powershell
+Set-Location R:\SAM
+R:\SAM\.venv\Scripts\python.exe ad_skipper\_active_url.py
+```
+
+> 會每秒印出目前前景視窗的行程、網址與分類；切換 Chrome/Edge/Firefox 的 watch / shorts /
+> 一般頁與全螢幕，確認分類正確。`Ctrl+C` 結束。
+
+---
+
 ## 附錄：環境前置
 
 ```powershell
@@ -300,4 +399,4 @@ R:\SAM\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 所需套件（已列於 `requirements.txt` / `pyproject.toml`）：
-`ultralytics`、`selenium`、`webdriver-manager`、`mss`、`imagehash`、`psutil`、`pydirectinput`、`opencv-python`、`easyocr`（選用備援）。
+`ultralytics`、`selenium`、`webdriver-manager`、`mss`、`imagehash`、`psutil`、`pydirectinput`、`uiautomation`（Phase 6 網址閘門）、`opencv-python`、`easyocr`（選用備援）。

@@ -14,6 +14,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import logging
 import math
 import signal
 import sys
@@ -26,8 +27,14 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from _capture import ScreenCapture, cursor_preserving_click, image_point_to_screen  # noqa: E402
+from _active_url import ActiveUrlGate  # noqa: E402
 
 DEFAULT_MODEL = HERE / "models" / "skip_ad_yolo.pt"
+
+_MUTEX_NAME = "Global\\SAM_youtube_ad_skipper"
+_MUTEX_HANDLE = None
+
+logger = logging.getLogger("ad_skipper.youtube_ad_skipper")
 
 _stop = False
 
@@ -45,13 +52,13 @@ def _center_distance(a: Tuple[float, float], b: Tuple[float, float]) -> float:
 def run(args: argparse.Namespace) -> int:
     model_path = Path(args.model)
     if not model_path.exists():
-        print(f"Model not found: {model_path}. Train it first (train_skip_model.py).", file=sys.stderr)
+        logger.error("Model not found: %s. Train it first (train_skip_model.py).", model_path)
         return 2
 
     try:
         from ultralytics import YOLO
     except Exception as exc:  # noqa: BLE001
-        print(f"ultralytics not installed: {exc}", file=sys.stderr)
+        logger.error("ultralytics not installed: %s", exc)
         return 2
 
     model = YOLO(str(model_path))
@@ -60,14 +67,41 @@ def run(args: argparse.Namespace) -> int:
 
     signal.signal(signal.SIGINT, _handle_sigint)
 
+    gate = ActiveUrlGate(fallback=args.fallback) if args.only_youtube_watch else None
+    last_gate_check = 0.0
+    gate_open = True
+    prev_gate_open = True
+
     last_center: Optional[Tuple[float, float]] = None
     stable_hits = 0
     last_click = 0.0
-    print(f"Running ({'dry-run' if args.dry_run else 'live'}). Ctrl+C to stop.")
+    logger.info(
+        "Running (%s%s). Ctrl+C to stop.",
+        "dry-run" if args.dry_run else "live",
+        ", watch-only gate" if gate is not None else "",
+    )
 
     try:
         while not _stop:
             loop_start = time.perf_counter()
+
+            if gate is not None:
+                now = time.monotonic()
+                if now - last_gate_check >= args.url_poll:
+                    gate_open = gate.should_detect()
+                    last_gate_check = now
+                    if gate_open != prev_gate_open:
+                        logger.info(
+                            "URL gate %s",
+                            "OPEN (YouTube watch)" if gate_open else "CLOSED (not a watch page)",
+                        )
+                        prev_gate_open = gate_open
+                if not gate_open:
+                    stable_hits = 0
+                    last_center = None
+                    time.sleep(args.interval)
+                    continue
+
             frame = capture.grab()
             results = model.predict(frame, conf=args.conf, verbose=False)
 
@@ -84,10 +118,10 @@ def run(args: argparse.Namespace) -> int:
                 if stable_hits >= args.stable_frames and (now - last_click) >= args.cooldown:
                     sx, sy = image_point_to_screen(cx, cy, mon_left, mon_top)
                     if args.dry_run:
-                        print(f"[dry-run] skip button @ screen ({sx}, {sy}) conf>={args.conf}")
+                        logger.info("[dry-run] skip button @ screen (%s, %s) conf>=%s", sx, sy, args.conf)
                     else:
                         cursor_preserving_click(sx, sy)
-                        print(f"Clicked skip @ ({sx}, {sy})")
+                        logger.info("Clicked skip @ (%s, %s)", sx, sy)
                     last_click = now
                     stable_hits = 0
                     last_center = None
@@ -131,11 +165,73 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stable-px", type=float, default=25.0, help="Max center drift to count as stable")
     p.add_argument("--cooldown", type=float, default=2.0, help="Min seconds between clicks")
     p.add_argument("--dry-run", action="store_true", help="Log detections, do not click")
+    p.add_argument(
+        "--only-youtube-watch",
+        action="store_true",
+        help="Phase 6: only capture/detect when the foreground tab is a YouTube watch page",
+    )
+    p.add_argument("--url-poll", type=float, default=1.0, help="Seconds between URL-gate checks")
+    p.add_argument(
+        "--fallback",
+        choices=["title", "none", "watch"],
+        default="title",
+        help="Gate decision when URL is unreadable and no cache exists",
+    )
+    p.add_argument("--log-file", default=None, help="Write logs to this file (for hidden/background runs)")
+    p.add_argument(
+        "--single-instance",
+        action="store_true",
+        help="Exit cleanly (0) if another instance is already running",
+    )
     return p
+
+
+def _setup_logging(args: argparse.Namespace) -> None:
+    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stderr)]
+    if args.log_file:
+        log_path = Path(args.log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_path, encoding="utf-8"))
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=handlers,
+    )
+
+
+def _acquire_single_instance(name: str):
+    """Return a held mutex handle, or ``None`` if another instance owns it."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CreateMutexW.argtypes = [wintypes.LPCVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        handle = kernel32.CreateMutexW(None, False, name)
+        error_already_exists = 183
+        if not handle:
+            return None
+        if kernel32.GetLastError() == error_already_exists:
+            kernel32.CloseHandle(handle)
+            return None
+        return handle
+    except Exception:  # pragma: no cover - non-Windows safety net
+        # Without a mutex we cannot guarantee single instance; allow running.
+        return True
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    _setup_logging(args)
+
+    if args.single_instance:
+        global _MUTEX_HANDLE
+        _MUTEX_HANDLE = _acquire_single_instance(_MUTEX_NAME)
+        if _MUTEX_HANDLE is None:
+            logger.info("Another instance is already running; exiting.")
+            return 0
+
     try:
         return run(args)
     except KeyboardInterrupt:
