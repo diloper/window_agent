@@ -1,0 +1,294 @@
+# 有效減少 YOLO 模型大小與記憶體消耗的方法
+
+以下從**模型選型 → 訓練設定 → 推論部署 → 後處理壓縮**四個層面說明，並對照你專案中 (PHASES_GUIDE.md) 目前的設定給出可直接套用的建議。
+
+---
+
+## 1. 模型選型(影響最大)
+
+| 模型 | 參數量 | 大小(約) | 適用 |
+|---|---|---|---|
+| YOLO11**n** (nano) | ~2.6M | ~5 MB | 你目前用的,已是最小 ✅ |
+| YOLO11**s** | ~9.4M | ~19 MB | 需更高準確度時 |
+
+你的 Colab notebook 已經用 `YOLO11n`,這是 Ultralytics 系列中**最小**的版本,選型上已經最佳化。若仍嫌大,可考慮:
+
+- **減少類別數**:你目前 `nc: 2`(`skip_ad_button`、`popup_dismiss_button`),類別越少 detection head 越小。
+- **降低輸入解析度** `imgsz`:從 `640` → `416` 或 `320`,推論記憶體與運算量大幅下降(記憶體約與 $imgsz^2$ 成正比)。skip 按鈕是大目標,降解析度通常仍可偵測。
+
+---
+
+## 2. 訓練階段降低記憶體
+
+你目前訓練參數:`epochs=100, imgsz=640, batch=16`。
+
+```python
+# Colab 訓練時的記憶體優化
+model.train(
+    data="data.yaml",
+    epochs=100,
+    imgsz=416,        # 從 640 降到 416,大幅省 VRAM
+    batch=8,          # 降 batch size 是最直接省 VRAM 的方法
+    half=True,        # FP16 混合精度訓練,省一半記憶體
+    cache=False,      # 不要把整個 dataset 載入 RAM(資料多時)
+    workers=2,        # 降低 dataloader 進程數
+)
+```
+
+**最有效的省 VRAM 手段**:降 `batch` 與 `imgsz`、開 `half=True`。
+
+---
+
+## 3. 推論/部署階段(你 Phase 5 即時偵測最關鍵)
+
+這是你專案最該優化的地方,因為 `youtube_ad_skipper.py` 是**長時間背景常駐**執行的。
+
+### (a) 匯出為更輕量的格式
+
+```python
+from ultralytics import YOLO
+model = YOLO("ad_skipper/models/skip_ad_yolo.pt")
+
+# ONNX:跨平台、可量化,記憶體佔用比 PyTorch 小
+model.export(format="onnx", imgsz=416, half=True)
+
+# 或 OpenVINO(Intel CPU 上最省資源、最快)
+model.export(format="openvino", imgsz=416, half=True, int8=True)
+```
+
+由於你是**純 CPU 螢幕擷取**(非 GPU),**OpenVINO + INT8** 在 Intel CPU 上通常能把記憶體與延遲都壓到最低。
+
+### (b) 量化(Quantization)— 縮小最有感
+
+| 方法 | 大小變化 | 說明 |
+|---|---|---|
+| FP16 (half) | ~1/2 | 幾乎無精度損失 |
+| INT8 量化 | ~1/4 | 需少量校準資料,精度略降但 skip 偵測通常夠用 |
+
+```python
+# INT8 量化需要校準資料集(用你的 val 集即可)
+model.export(format="onnx", int8=True, data="data.yaml")
+```
+
+### (c) 推論時降低記憶體佔用
+
+在 `youtube_ad_skipper.py` 載入模型時:
+
+```python
+# 限制推論解析度,並用半精度
+results = model.predict(
+    frame,
+    imgsz=416,      # 與訓練/匯出一致
+    half=True,      # FP16 推論
+    device="cpu",
+    verbose=False,  # 關閉冗餘輸出
+    max_det=5,      # skip/popup 按鈕很少,限制最大偵測數省記憶體
+)
+```
+
+### (d) 提高偵測間隔(你已有此設計)
+
+你的 `--interval 0.5` 與 Phase 6 的 `--only-youtube-watch` 閘門已經是很好的**記憶體/CPU 節流**策略:非 watch 頁時完全略過推論。可考慮:
+
+- 把 `--interval` 調大(如 `1.0`),降低單位時間推論次數。
+- 善用 Phase 6 四層閘門,確保只有真正播放時才載入運算。
+
+---
+
+## 4. 進階壓縮技術
+
+| 技術 | 效果 | 複雜度 |
+|---|---|---|
+| **剪枝 (Pruning)** | 移除不重要的權重通道,縮小模型 | 中(需重新微調) |
+| **知識蒸餾 (Distillation)** | 用大模型教小模型,小模型保持高準確度 | 高 |
+| **TensorRT** (NVIDIA GPU) | 引擎層級優化,大幅省記憶體+加速 | 中 |
+
+對你的場景(CPU、單純 2 類按鈕偵測),**剪枝/蒸餾通常不必要**,投資報酬率低。
+
+---
+
+## 針對你專案的優先建議(投報率排序)
+
+1. **匯出 ONNX 或 OpenVINO + INT8 量化** → 模型從 ~5MB 降到 ~1.5MB,CPU 推論記憶體大幅下降。
+2. **降低 `imgsz` 到 416 或 320** → 訓練與推論記憶體同步下降,skip 按鈕仍可偵測。
+3. **推論加 `max_det`、`verbose=False`、`half=True`** → 在 youtube_ad_skipper.py 的 `predict` 呼叫處微調。
+4. **善用既有 `--interval` 與 `--only-youtube-watch` 閘門** → 你已經做得很好,確保常駐時不浪費資源。
+
+---
+
+是否需要我**檢視 youtube_ad_skipper.py 與 Colab notebook 的實際程式碼**,給出更精確、可直接修改的程式碼建議?(目前處於唯讀的 Ask 模式,我只會分析說明,不會修改檔案。)
+
+
+我先讀取實際程式碼,才能給出精準、可直接套用的修改建議。  
+
+Read [](file:///d%3A/window_agent/ad_skipper/youtube_ad_skipper.py#1-1), lines 1 to 120
+
+Read [](file:///d%3A/window_agent/ad_skipper/train_skip_model.py)
+
+讓我繼續讀取 youtube_ad_skipper.py 的推論與參數定義部分,以及 `_capture.py` 的擷取邏輯。  
+
+Read [](file:///d%3A/window_agent/ad_skipper/youtube_ad_skipper.py#120-120), lines 120 to 243
+
+Read [](file:///d%3A/window_agent/ad_skipper/_capture.py#1-1), lines 1 to 80
+
+已掌握實際程式碼。以下是**可直接套用**的精準修改建議,對照你真實的程式碼行給出。
+
+---
+
+## 1. 推論端最關鍵 — youtube_ad_skipper.py
+
+### (a) `model.predict` 呼叫(目前 line 102)
+
+目前:
+```python
+results = model.predict(frame, conf=args.conf, verbose=False)
+```
+
+改成(限制解析度、最大偵測數、半精度):
+```python
+results = model.predict(
+    frame,
+    imgsz=args.imgsz,
+    conf=args.conf,
+    max_det=args.max_det,
+    half=args.half,
+    verbose=False,
+)
+```
+
+> `max_det=5` 對「最多 1~2 顆按鈕」的場景可大幅減少 NMS 後處理的記憶體與時間;`imgsz=416` 讓推論張量從 $640^2$ 降到 $416^2$(約省 58% 運算記憶體);skip 按鈕是大目標,通常仍可偵測。
+
+### (b) `build_parser()` 新增三個參數(在 `--conf` 那行之後)
+
+目前:
+```python
+p.add_argument("--conf", type=float, default=0.5, help="Detection confidence threshold")
+```
+
+之後加入:
+```python
+p.add_argument("--imgsz", type=int, default=416, help="Inference image size (smaller = less RAM/CPU)")
+p.add_argument("--max-det", type=int, default=5, help="Max detections per frame (buttons are few)")
+p.add_argument("--half", action="store_true", help="FP16 inference (smaller memory footprint)")
+```
+
+### (c) 進一步省記憶體:擷取後縮圖再推論(可選)
+
+在 `frame = capture.grab()` 之後、`predict` 之前,若你的螢幕是 4K,可先降採樣。但**注意座標換算**:`_best_box` 回傳的座標需依縮放比例還原,否則點擊位置會偏。最簡單作法是**交給 Ultralytics 內部 `imgsz` 縮放**(即上面的 (a)),它會自動把偵測框換算回原圖座標,你不必改 `image_point_to_screen` 邏輯。**建議優先用 (a),不要自己縮圖。**
+
+---
+
+## 2. 改用量化模型 — 不需改程式邏輯
+
+`YOLO()` 對 `.onnx` / OpenVINO 目錄的 `predict` API **完全相同**,所以只要:
+
+1. 一次性匯出量化模型(新增一個小腳本或在 Colab 跑):
+```python
+from ultralytics import YOLO
+
+model = YOLO("ad_skipper/models/skip_ad_yolo.pt")
+
+# 選項 A:ONNX FP16(跨平台、約 1/2 大小)
+model.export(format="onnx", imgsz=416, half=True, simplify=True)
+
+# 選項 B(CPU 最佳):OpenVINO INT8(約 1/4 大小、Intel CPU 最快)
+model.export(format="openvino", imgsz=416, int8=True, data="ad_skipper/dataset/yolo/data.yaml")
+```
+
+2. 啟動時把 `--model` 指到匯出檔即可,**其餘程式不用動**:
+```powershell
+R:\SAM\.venv\Scripts\python.exe ad_skipper\youtube_ad_skipper.py `
+  --model ad_skipper\models\skip_ad_yolo_openvino_model `
+  --imgsz 416 --conf 0.9
+```
+
+> 你是**純 CPU 螢幕擷取**(`mss` + `_capture.ScreenCapture`),OpenVINO INT8 在 Intel CPU 上記憶體與延遲最低。
+
+---
+
+## 3. 訓練端降記憶體 — train_skip_model.py
+
+### `model.train(...)` 呼叫(line 35)
+
+目前:
+```python
+results = model.train(
+    data=str(DATA_YAML),
+    epochs=args.epochs,
+    imgsz=args.imgsz,
+    batch=args.batch,
+    device=args.device,
+    seed=args.seed,
+    project=str(RUNS_DIR),
+    name=args.name,
+    exist_ok=True,
+)
+```
+
+加入 `half`、`cache`、`workers`(對應新參數):
+```python
+results = model.train(
+    data=str(DATA_YAML),
+    epochs=args.epochs,
+    imgsz=args.imgsz,
+    batch=args.batch,
+    device=args.device,
+    seed=args.seed,
+    half=args.half,
+    cache=args.cache,
+    workers=args.workers,
+    project=str(RUNS_DIR),
+    name=args.name,
+    exist_ok=True,
+)
+```
+
+### `build_parser()` 調整(line 60 附近)
+
+把 `--imgsz` 預設改小,並新增三個旗標:
+```python
+p.add_argument("--imgsz", type=int, default=416)   # 原本 640,降低訓練 VRAM
+p.add_argument("--batch", type=int, default=8)     # 原本 16,最直接省 VRAM
+p.add_argument("--half", action="store_true", help="FP16 mixed-precision training")
+p.add_argument("--cache", default=False, help="Cache images in RAM/disk: True/'ram'/'disk'/False")
+p.add_argument("--workers", type=int, default=2, help="Dataloader workers (fewer = less RAM)")
+```
+
+> **最有感的省 VRAM 三招**:降 `batch`、降 `imgsz`、開 `--half`。
+
+---
+
+## 4. 一併縮小最終 `.pt`(訓練後 strip optimizer)
+
+`best.pt` 含 optimizer 狀態時會偏大。在 train_skip_model.py 複製權重那段(line 48 `shutil.copy(best, OUTPUT_WEIGHTS)`)可改成輸出 strip 後的版本:
+
+目前:
+```python
+if best.exists():
+    shutil.copy(best, OUTPUT_WEIGHTS)
+    print(f"Best weights -> {OUTPUT_WEIGHTS}")
+```
+
+改成:
+```python
+if best.exists():
+    from ultralytics.utils.torch_utils import strip_optimizer
+    shutil.copy(best, OUTPUT_WEIGHTS)
+    strip_optimizer(str(OUTPUT_WEIGHTS))  # 移除 optimizer/EMA,縮小檔案
+    print(f"Best weights (stripped) -> {OUTPUT_WEIGHTS}")
+```
+
+> Ultralytics 在 `epochs` 結束時通常已自動 strip `best.pt`,但若你中途取用 checkpoint,這行可確保最小化。
+
+---
+
+## 優先順序(投報率)
+
+| 順位 | 改動 | 檔案 | 效果 |
+|---|---|---|---|
+| 1 | `predict` 加 `imgsz=416, max_det=5, half` | youtube_ad_skipper.py | 推論記憶體/CPU 立即下降,改動最小 |
+| 2 | 匯出 OpenVINO INT8,`--model` 指過去 | 新增匯出腳本 | 模型 ~5MB→~1.5MB,CPU 最省 |
+| 3 | 訓練 `batch=8, imgsz=416, half` | train_skip_model.py | 訓練 VRAM 大降 |
+| 4 | `strip_optimizer` | train_skip_model.py | 最終 `.pt` 縮小 |
+
+第 1 項風險最低、立即見效,建議先做。需要我切到可編輯模式實際套用這些修改嗎?(目前是唯讀的 Ask 模式,我只提供建議不會動檔案。)
